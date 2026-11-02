@@ -25,22 +25,34 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      - name: Pillow Kur ve Ikon Hazirla
+      - name: Pillow Kur
         run: pip3 install pillow
 
-      - name: Android Yapilandirmasi ve Izinler
+      - name: Android Yapilandirmasi, Gradle Duzenleme ve Ikon
         run: |
-          # Android klasoru yoksa olustur
+          # 1. Android klasoru yoksa olustur (mevcut dosyalari ezme)
           if [ ! -d "android" ]; then
             flutter create . --project-name=spectre_duo --platforms=android --org=com.spectre.duo
           fi
-          
-          # AndroidManifest.xml icine tum izinleri ekle
+
+          # 2. minSdkVersion degerini 21 yap (Gradle derleme hatasini cozer)
+          python3 -c '
+          import os
+          gradle_path = "android/app/build.gradle"
+          if os.path.exists(gradle_path):
+              with open(gradle_path, "r", encoding="utf-8") as f:
+                  content = f.read()
+              content = content.replace("minSdkVersion flutter.minSdkVersion", "minSdkVersion 21")
+              content = content.replace("minSdkVersion = flutter.minSdkVersion", "minSdkVersion = 21")
+              with open(gradle_path, "w", encoding="utf-8") as f:
+                  f.write(content)
+          '
+
+          # 3. AndroidManifest.xml icine izinleri ekle
           python3 -c '
           path = "android/app/src/main/AndroidManifest.xml"
           with open(path, "r", encoding="utf-8") as f:
               c = f.read()
-
           perms = """
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.RECORD_AUDIO"/>
@@ -49,18 +61,15 @@ jobs:
               <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
           """
-
           if "android.permission.RECORD_AUDIO" not in c:
               c = c.replace("<application", perms + "\n    <application")
-
           if "usesCleartextTraffic" not in c:
               c = c.replace("<application", "<application android:usesCleartextTraffic=\"true\"")
-
           with open(path, "w", encoding="utf-8") as f:
               f.write(c)
           '
 
-          # Neon AI Ikonlarini uret
+          # 4. Ozel Neon Siber AI Uygulama Ikonu Olustur
           python3 -c '
           import os
           from PIL import Image, ImageDraw
