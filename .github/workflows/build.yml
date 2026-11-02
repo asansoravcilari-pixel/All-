@@ -1,0 +1,58 @@
+name: Build Vision AI APK
+
+on:
+  push:
+    branches: [ "main", "ana" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Java 17 Kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Flutter Kur
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Android Altyapisi ve Ekran/Ses Izinleri
+        run: |
+          flutter create . --project-name=spectre_duo --platforms=android --org=com.spectre.duo --overwrite
+          
+          python3 -c '
+          path = "android/app/src/main/AndroidManifest.xml"
+          with open(path, "r", encoding="utf-8") as f:
+              c = f.read()
+          perms = """
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"/>
+          """
+          if "android.permission.RECORD_AUDIO" not in c:
+              c = c.replace("<application", perms + "\n    <application")
+          if "usesCleartextTraffic" not in c:
+              c = c.replace("<application", "<application android:usesCleartextTraffic=\"true\"")
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(c)
+          '
+          flutter pub get
+
+      - name: Build APK (Debug)
+        run: flutter build apk --debug
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPECTRE-Vision-APK
+          path: build/app/outputs/flutter-apk/app-debug.apk
