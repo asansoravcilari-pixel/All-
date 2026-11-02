@@ -25,20 +25,23 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      - name: Android Projesi, Tum Izinler ve Ikon Uretimi
+      - name: Pillow Kur ve Ikon Hazirla
+        run: pip3 install pillow
+
+      - name: Android Yapilandirmasi ve Izinler
         run: |
-          # Android klasoru yoksa olustur, varsa main.dart ve mevcut dosyalari asla silme
+          # Android klasoru yoksa olustur
           if [ ! -d "android" ]; then
             flutter create . --project-name=spectre_duo --platforms=android --org=com.spectre.duo
           fi
           
-          # AndroidManifest.xml dosyasina tum izinleri ve HTTP iletisim iznini ekle
+          # AndroidManifest.xml icine tum izinleri ekle
           python3 -c '
           path = "android/app/src/main/AndroidManifest.xml"
           with open(path, "r", encoding="utf-8") as f:
               c = f.read()
 
-          permissions = """
+          perms = """
               <uses-permission android:name="android.permission.INTERNET"/>
               <uses-permission android:name="android.permission.RECORD_AUDIO"/>
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
@@ -47,19 +50,17 @@ jobs:
               <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
           """
 
-          # Izinleri <manifest> icine ekle
           if "android.permission.RECORD_AUDIO" not in c:
-              c = c.replace("<application", permissions + "\n    <application")
+              c = c.replace("<application", perms + "\n    <application")
 
-          # HTTP ve yerel IP baglantisi (cleartext) iznini ekle
           if "usesCleartextTraffic" not in c:
               c = c.replace("<application", "<application android:usesCleartextTraffic=\"true\"")
 
           with open(path, "w", encoding="utf-8") as f:
               f.write(c)
           '
-          
-          # Ozel Siber Neon SPECTRE AI Uygulama Ikonu Olustur
+
+          # Neon AI Ikonlarini uret
           python3 -c '
           import os
           from PIL import Image, ImageDraw
@@ -77,18 +78,13 @@ jobs:
               os.makedirs(target_dir, exist_ok=True)
               img = Image.new("RGBA", (size, size), (15, 21, 39, 255))
               draw = ImageDraw.Draw(img)
-              
-              # Dis neon mor cember
               margin = int(size * 0.1)
               draw.ellipse([margin, margin, size - margin, size - margin], outline=(108, 92, 231, 255), width=max(2, int(size * 0.05)))
-              
-              # Ic parlayan AI vizyon gozu
               inner_margin = int(size * 0.3)
               draw.ellipse([inner_margin, inner_margin, size - inner_margin, size - inner_margin], fill=(162, 155, 254, 255))
-              
               img.save(os.path.join(target_dir, "ic_launcher.png"))
           '
-          
+
           flutter pub get
 
       - name: APK Derle (Debug)
