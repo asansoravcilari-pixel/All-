@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Kodu Cek
         uses: actions/checkout@v4
 
       - name: Java 17 Kur
@@ -25,10 +25,14 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      - name: Android Altyapisi ve Ekran/Ses Izinleri
+      - name: Android Yapilandirmasi, Izinler ve Ikon Uretimi
         run: |
-          flutter create . --project-name=spectre_duo --platforms=android --org=com.spectre.duo --overwrite
+          # Proje yoksa olustur ama mevcut dosyalari (main.dart vb.) ezme
+          if [ ! -d "android" ]; then
+            flutter create . --project-name=spectre_duo --platforms=android --org=com.spectre.duo
+          fi
           
+          # Android izinlerini ekle
           python3 -c '
           path = "android/app/src/main/AndroidManifest.xml"
           with open(path, "r", encoding="utf-8") as f:
@@ -46,12 +50,40 @@ jobs:
           with open(path, "w", encoding="utf-8") as f:
               f.write(c)
           '
+          
+          # Ozel SPECTRE Logo / Uygulama Ikonu Olusturma (Python/Pillow)
+          python3 -c '
+          import os
+          from PIL import Image, ImageDraw
+
+          sizes = {
+              "mipmap-mdpi": 48,
+              "mipmap-hdpi": 72,
+              "mipmap-xhdpi": 96,
+              "mipmap-xxhdpi": 144,
+              "mipmap-xxxhdpi": 192
+          }
+          res_dir = "android/app/src/main/res"
+          for folder, size in sizes.items():
+              target_dir = os.path.join(res_dir, folder)
+              os.makedirs(target_dir, exist_ok=True)
+              img = Image.new("RGBA", (size, size), (15, 21, 39, 255))
+              draw = ImageDraw.Draw(img)
+              # Dis cember (Mor neon)
+              margin = int(size * 0.1)
+              draw.ellipse([margin, margin, size - margin, size - margin], outline=(108, 92, 231, 255), width=max(2, int(size * 0.05)))
+              # Ic cember (AI Vizyon gozu)
+              inner_margin = int(size * 0.3)
+              draw.ellipse([inner_margin, inner_margin, size - inner_margin, size - inner_margin], fill=(162, 155, 254, 255))
+              img.save(os.path.join(target_dir, "ic_launcher.png"))
+          '
+          
           flutter pub get
 
-      - name: Build APK (Debug)
+      - name: APK Derle (Debug)
         run: flutter build apk --debug
 
-      - name: Upload Artifact
+      - name: APK Yayinla
         uses: actions/upload-artifact@v4
         with:
           name: SPECTRE-Vision-APK
