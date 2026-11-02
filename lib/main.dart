@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:speech_to_text/speech_to_text.dart';
@@ -51,7 +50,7 @@ class _VisionAssistantScreenState extends State<VisionAssistantScreen> {
 
   bool _isListening = false;
   bool _isLoading = false;
-  bool _shareScreenOnSend = true; // Ekranı görsün mü?
+  bool _shareScreenOnSend = true;
   final List> _messages = [];
 
   @override
@@ -79,7 +78,6 @@ class _VisionAssistantScreenState extends State<VisionAssistantScreen> {
     await prefs.setString('vision_server', _serverCtrl.text.trim());
   }
 
-  // Dokun-Aç / Dokun-Kapat Ses Mantığı
   Future<void> _toggleMic() async {
     if (_isListening) {
       await _speech.stop();
@@ -112,7 +110,9 @@ class _VisionAssistantScreenState extends State<VisionAssistantScreen> {
           localeId: 'tr_TR',
           listenMode: ListenMode.dictation,
           onResult: (result) {
-            setState(() => _promptCtrl.text = result.recognizedWords);
+            setState(() {
+              _promptCtrl.text = result.recognizedWords;
+            });
           },
         );
       }
@@ -128,7 +128,6 @@ class _VisionAssistantScreenState extends State<VisionAssistantScreen> {
 
     String? base64Image;
 
-    // İstediğinizde ekranı yakalama adımı
     if (_shareScreenOnSend) {
       try {
         final tempDir = await getTemporaryDirectory();
@@ -143,9 +142,7 @@ class _VisionAssistantScreenState extends State<VisionAssistantScreen> {
           final bytes = await file.readAsBytes();
           base64Image = base64Encode(bytes);
         }
-      } catch (_) {
-        // Ekran yakalama desteklenmediğinde sadece metin gider
-      }
+      } catch (_) {}
     }
 
     try {
@@ -156,7 +153,7 @@ class _VisionAssistantScreenState extends State<VisionAssistantScreen> {
           'prompt': query,
           'image_base64': base64Image,
         }),
-      ).timeout(const Duration(seconds: 45));
+      ).timeout(const Duration(seconds: 60));
 
       if (res.statusCode == 200) {
         final data = jsonDecode(utf8.decode(res.bodyBytes));
@@ -186,7 +183,7 @@ class _VisionAssistantScreenState extends State<VisionAssistantScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('SPECTRE • Birlikte Analiz'),
+        title: const Text('SPECTRE • Pair Programmer'),
         backgroundColor: const Color(0xFF0F1527),
         actions: [
           Row(
@@ -219,12 +216,15 @@ class _VisionAssistantScreenState extends State<VisionAssistantScreen> {
                   child: Container(
                     margin: const EdgeInsets.symmetric(vertical: 4),
                     padding: const EdgeInsets.all(12),
-                    constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
+                    constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
                     decoration: BoxDecoration(
                       color: isUser ? const Color(0xFF6C5CE7) : const Color(0xFF1E2846),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Text(m['text'] ?? '', style: const TextStyle(fontSize: 14)),
+                    child: SelectableText(
+                      m['text'] ?? '',
+                      style: const TextStyle(fontSize: 14, color: Colors.white),
+                    ),
                   ),
                 );
               },
