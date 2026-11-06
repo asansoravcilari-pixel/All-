@@ -1,0 +1,39 @@
+name: SPECTRE Oyun - Web (WASM)
+
+on:
+  push:
+    paths:
+      - "spectre_game/**"
+      - ".github/workflows/spectre_game_web.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: spectre_game
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
+
+      - name: Bagimliliklar
+        run: flutter pub get
+
+      - name: Analiz
+        run: flutter analyze
+
+      - name: Testler
+        run: flutter test
+
+      - name: WebAssembly derle
+        run: flutter build web --wasm --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spectre-game-web
+          path: spectre_game/build/web
