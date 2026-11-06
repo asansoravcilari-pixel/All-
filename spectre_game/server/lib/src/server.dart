@@ -1686,6 +1686,14 @@ class SpectreServer {
         ..._adminUserRow(u),
         'notes': u.notes,
         'warnings': u.warnings,
+        'email': u.email,
+        'emailVerified': u.emailVerified,
+        'entitlements': {
+          for (final e in u.entitlements.entries)
+            if (DateTime.now().isBefore(e.value)) e.key: e.value.toIso8601String(),
+        },
+        'featureNames': {for (final f in store.features) f.key: f.name},
+        'inventory': {for (final e in u.inventory.entries) if (e.value > 0) e.key: e.value},
         'ledger': [for (final e in store.ledger.reversed.where((e) => e.userId == u.id).take(40)) e.toJson()],
         'orders': [for (final o in store.orders.where((o) => o.userId == u.id).take(40)) o.toJson()],
       };

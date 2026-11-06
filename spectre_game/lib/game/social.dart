@@ -177,6 +177,9 @@ class _ChatLineViewState extends State<ChatLineView> {
   }
 }
 
+String _date(DateTime t) =>
+    '${t.day.toString().padLeft(2, '0')}.${t.month.toString().padLeft(2, '0')}.${t.year} ${_hm(t)}';
+
 String _hm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
 // ---------------------------------------------------------------------------
@@ -561,10 +564,12 @@ class _ProfileSheetState extends State<ProfileSheet> {
                     child: PressButton(
                       onTap: _busy
                           ? null
-                          : () => _run(() async {
-                                final bytes = await pickImageBytes();
-                                if (bytes != null) await c.uploadAvatar(bytes);
-                              }),
+                          : me.isLocked('avatar')
+                              ? () => showLocked(context, c, 'avatar')
+                              : () => _run(() async {
+                                    final bytes = await pickImageBytes();
+                                    if (bytes != null) await c.uploadAvatar(bytes);
+                                  }),
                       padding: const EdgeInsets.all(8),
                       radius: 20,
                       tooltip: 'Fotoğraf yükle',
@@ -622,6 +627,107 @@ class _ProfileSheetState extends State<ProfileSheet> {
               ]),
               if (!c.config.translate)
                 const Text('Otomatik çeviri şu an kapalı.', style: TextStyle(fontSize: 11, color: SpectreColors.muted)),
+              if (!me.guest) ...[
+                const Divider(height: 24),
+                Row(children: [
+                  const Icon(Icons.alternate_email_rounded, size: 18, color: SpectreColors.muted),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(me.email.isEmpty ? 'E-posta eklenmemiş' : me.email,
+                        style: TextStyle(color: me.email.isEmpty ? SpectreColors.muted : SpectreColors.ink)),
+                  ),
+                  if (me.email.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: Text(me.emailVerified ? '✓ doğrulandı' : 'doğrulanmadı',
+                          style: TextStyle(fontSize: 11, color: me.emailVerified ? SpectreColors.green : SpectreColors.amber)),
+                    ),
+                  TextButton(
+                    onPressed: _busy
+                        ? null
+                        : () async {
+                            final ctl = TextEditingController(text: me.email);
+                            final v = await showDialog<String>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                backgroundColor: SpectreColors.panel,
+                                title: const Text('E-posta adresi'),
+                                content: TextField(
+                                    controller: ctl, autofocus: true, keyboardType: TextInputType.emailAddress),
+                                actions: [
+                                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Vazgeç')),
+                                  FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text), child: const Text('Kaydet')),
+                                ],
+                              ),
+                            );
+                            if (v != null) await _run(() => c.setEmail(v.trim()));
+                          },
+                    child: Text(me.email.isEmpty ? 'Ekle' : 'Değiştir'),
+                  ),
+                ]),
+                if (me.email.isNotEmpty && !me.emailVerified)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: _busy
+                          ? null
+                          : () => _run(() async {
+                                await c.resendVerify();
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context)
+                                      .showSnackBar(const SnackBar(content: Text('Doğrulama e-postası gönderildi')));
+                                }
+                              }),
+                      child: const Text('Doğrulama e-postasını tekrar gönder'),
+                    ),
+                  ),
+              ],
+              const Divider(height: 24),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Paket haklarım', style: TextStyle(fontWeight: FontWeight.w800, color: SpectreColors.ink.withOpacity(0.9))),
+              ),
+              const SizedBox(height: 6),
+              if (me.entitlements.isEmpty)
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Aktif paket hakkın yok.', style: TextStyle(color: SpectreColors.muted, fontSize: 13)),
+                )
+              else
+                for (final e in me.entitlements.entries)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.verified_rounded, color: SpectreColors.green, size: 20),
+                    title: Text(me.featureNames[e.key] ?? e.key),
+                    trailing: Text(e.value.year >= 2100 ? 'süresiz' : 'bitiş ${_date(e.value)}',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: e.value.difference(DateTime.now()).inDays < 3 ? SpectreColors.amber : SpectreColors.muted)),
+                  ),
+              if (me.locked.isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Wrap(spacing: 6, runSpacing: 6, children: [
+                  for (final k in me.locked)
+                    Chip(
+                      avatar: const Icon(Icons.lock_rounded, size: 14),
+                      label: Text(me.featureNames[k] ?? k, style: const TextStyle(fontSize: 12)),
+                    ),
+                ]),
+              ],
+              if (me.inventory.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Wrap(spacing: 6, runSpacing: 6, children: [
+                    for (final e in me.inventory.entries)
+                      Chip(
+                        label: Text(
+                            '${c.gifts.where((g) => g.id == e.key).map((g) => '${g.emoji} ${g.name}').firstOrNull ?? e.key} ×${e.value}'),
+                      ),
+                  ]),
+                ),
+              ],
             ]),
           ),
         );
@@ -653,4 +759,194 @@ class CountBadge extends StatelessWidget {
               style: const TextStyle(color: Color(0xFFCA1A49), fontSize: 10, fontWeight: FontWeight.w800, height: 1.7)),
         ),
       );
+}
+
+
+/// Kilitli özellik uyarısı: paket önerisiyle.
+void showLocked(BuildContext context, SpectreClient c, String feature) {
+  final name = c.me?.featureNames[feature] ?? feature;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    content: Row(children: [
+      const Icon(Icons.lock_rounded, size: 18, color: SpectreColors.gold),
+      const SizedBox(width: 8),
+      Expanded(child: Text('$name paketinde yok — Market\'ten açabilirsin')),
+    ]),
+  ));
+}
+
+/// Şifremi unuttum penceresi.
+Future<void> showForgotPassword(BuildContext context, SpectreClient c) async {
+  final ctl = TextEditingController();
+  final v = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: SpectreColors.panel,
+      title: const Text('Şifremi unuttum'),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        const Text('Hesabına kayıtlı e-posta adresini ya da kullanıcı adını yaz; sıfırlama bağlantısı gönderelim.',
+            style: TextStyle(color: SpectreColors.muted, fontSize: 13)),
+        const SizedBox(height: 10),
+        TextField(controller: ctl, autofocus: true, keyboardType: TextInputType.emailAddress),
+      ]),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Vazgeç')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text), child: const Text('Gönder')),
+      ],
+    ),
+  );
+  if (v == null || v.trim().isEmpty || !context.mounted) return;
+  try {
+    final msg = await c.forgotPassword(v.trim());
+    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  } catch (e) {
+    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Destek
+// ---------------------------------------------------------------------------
+
+class SupportSheet extends StatefulWidget {
+  const SupportSheet({super.key, required this.client});
+  final SpectreClient client;
+
+  @override
+  State<SupportSheet> createState() => _SupportSheetState();
+}
+
+class _SupportSheetState extends State<SupportSheet> {
+  Map<String, dynamic>? _t;
+  String _bot = 'Asistan';
+  String? _err;
+  bool _sending = false;
+  final _ctl = TextEditingController();
+  Timer? _poll;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _poll = Timer.periodic(const Duration(seconds: 8), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _poll?.cancel();
+    _ctl.dispose();
+    super.dispose();
+  }
+
+  void _apply(Map<String, dynamic> r) {
+    if (!mounted) return;
+    setState(() {
+      _t = (r['ticket'] as Map).cast<String, dynamic>();
+      _bot = '${r['botName'] ?? 'Asistan'}';
+      _err = null;
+    });
+  }
+
+  Future<void> _load() async {
+    try {
+      _apply(await widget.client.support());
+    } catch (e) {
+      if (mounted) setState(() => _err = '$e');
+    }
+  }
+
+  Future<void> _send([String? preset]) async {
+    final text = (preset ?? _ctl.text).trim();
+    if (text.isEmpty || _sending) return;
+    setState(() => _sending = true);
+    try {
+      _apply(await widget.client.support(text));
+      _ctl.clear();
+    } catch (e) {
+      if (mounted) setState(() => _err = '$e');
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final msgs = [for (final m in (_t?['messages'] as List? ?? const [])) (m as Map).cast<String, dynamic>()];
+    final status = '${_t?['status'] ?? ''}';
+    final lockedChat = status == 'locked';
+    return SheetFrame(
+      title: 'Destek',
+      maxHeight: MediaQuery.sizeOf(context).height * 0.8,
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (status == 'waiting')
+          const Padding(
+            padding: EdgeInsets.only(bottom: 6),
+            child: Text('Talebin bir yetkiliye iletildi; yanıt burada görünecek.',
+                style: TextStyle(color: SpectreColors.amber, fontSize: 12)),
+          ),
+        Flexible(
+          child: ListView.builder(
+            reverse: true,
+            shrinkWrap: true,
+            itemCount: msgs.length,
+            itemBuilder: (_, i) {
+              final m = msgs[msgs.length - 1 - i];
+              final from = '${m['from']}';
+              final mine = from == 'user';
+              final who = mine ? '' : (from.startsWith('admin:') ? 'Yetkili' : _bot);
+              return Align(
+                alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 380),
+                  child: Container(
+                    margin: const EdgeInsets.symmetric(vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: mine
+                          ? SpectreColors.accent.withOpacity(0.22)
+                          : from.startsWith('admin:')
+                              ? SpectreColors.green.withOpacity(0.14)
+                              : Colors.white.withOpacity(0.07),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: SpectreColors.line),
+                    ),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      if (who.isNotEmpty)
+                        Text(who, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, color: SpectreColors.cyan)),
+                      Text('${m['text']}', style: const TextStyle(fontSize: 14)),
+                    ]),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        if (_err != null) Text(_err!, style: const TextStyle(color: SpectreColors.red, fontSize: 12)),
+        const SizedBox(height: 6),
+        if (!lockedChat)
+          Wrap(spacing: 6, children: [
+            for (final q in const ['Paketlerim', 'Siparişim', 'Coin nasıl alırım?', 'Yetkili'])
+              ActionChip(label: Text(q, style: const TextStyle(fontSize: 12)), onPressed: _sending ? null : () => _send(q)),
+          ]),
+        const SizedBox(height: 6),
+        Row(children: [
+          Expanded(
+            child: TextField(
+              controller: _ctl,
+              enabled: !lockedChat,
+              maxLength: 1000,
+              textInputAction: TextInputAction.send,
+              onSubmitted: (_) => _send(),
+              decoration: InputDecoration(counterText: '', hintText: lockedChat ? 'Görüşme kilitlendi' : 'Sorunu yaz'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          PressButton(
+              onTap: _sending || lockedChat ? null : _send,
+              padding: const EdgeInsets.all(11),
+              radius: 10,
+              child: const Icon(Icons.send_rounded)),
+        ]),
+      ]),
+    );
+  }
 }

@@ -51,11 +51,15 @@ Flutter projesi, WebAssembly derlemesi, masa/lobi/market arayüzü, yönetim mer
 - Yönetici girişi kullanıcı adı + şifre (sunucuda doğrulanır).
 - Masaüstü üç sütunlu masa ekranı.
 
-### Faz 3 — Sıradaki
-- PayTR / Shopier ödeme bildirimi (callback) doğrulaması
-- E-posta doğrulama ve şifre sıfırlama (v39 `mailer.py` mantığı), Google girişi
-- Avatar/fotoğraf yükleme, logo yükleme
-- Canlı destek, bildirim merkezi, tanıtım sitesi
+### Faz 3 — Tamamlandı
+- PayTR iFrame + imzalı bildirimle otomatik onay
+- SMTP mail ve şablonlar: kayıt/doğrulama, şifremi unuttum, satın alma, abonelik
+- Abonelik ve özellik hakları, otomatik bitiş, kilitleme, paket içi hediyeler
+- Destek robotu ve admin gelen kutusu, bildirim merkezi, DM, otomatik çeviri
+- Avatar ve logo/arka plan yükleme, admin'den metinler, uç noktalar, animasyonlar
+
+### Faz 3b — Sıradaki
+- Shopier otomatik bildirimi, Google girişi, tanıtım sitesi
 - Veri büyüyünce JSON dosyadan SQLite/PostgreSQL'e geçiş (aynı `Store` arayüzü)
 
 ### Faz 4

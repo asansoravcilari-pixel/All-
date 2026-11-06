@@ -29,6 +29,26 @@ class Me {
   int get unreadNotices => (j['unreadNotices'] as num?)?.toInt() ?? 0;
   int get unreadDms => (j['unreadDms'] as num?)?.toInt() ?? 0;
 
+  String get email => '${j['email'] ?? ''}';
+  bool get emailVerified => j['emailVerified'] == true;
+
+  /// Özellik anahtarı → bitiş.
+  Map<String, DateTime> get entitlements => {
+        for (final e in ((j['entitlements'] as Map?) ?? const {}).entries)
+          if (DateTime.tryParse('${e.value}') != null) '${e.key}': DateTime.parse('${e.value}').toLocal(),
+      };
+
+  /// Bu kullanıcı için kilitli özellikler.
+  Set<String> get locked => {for (final x in (j['locked'] as List? ?? const [])) '$x'};
+  bool isLocked(String feature) => locked.contains(feature);
+
+  /// Özellik anahtarı → görünen ad.
+  Map<String, String> get featureNames => {for (final e in ((j['features'] as Map?) ?? const {}).entries) '${e.key}': '${e.value}'};
+
+  /// Hediye kimliği → adet.
+  Map<String, int> get inventory =>
+      {for (final e in ((j['inventory'] as Map?) ?? const {}).entries) '${e.key}': (e.value as num).toInt()};
+
   Me copyWith(Map<String, dynamic> patch) => Me({...j, ...patch});
 
   SeatPlayer asSeatPlayer() => SeatPlayer(
@@ -50,6 +70,12 @@ class PublicConfig {
   String get backgroundImageUrl => mediaUrl('${j['backgroundImageUrl'] ?? ''}');
   String get logoUrl => mediaUrl('${j['logoUrl'] ?? ''}');
   bool get translate => j['translate'] == true;
+  bool get paytrReady => j['paytrReady'] == true;
+  bool get mailReady => j['mailReady'] == true;
+  bool get requireEmail => j['requireEmail'] == true;
+  bool get support => j['support'] == true;
+  String get supportBotName => '${j['supportBotName'] ?? 'Asistan'}';
+  Map<String, dynamic> get animations => (j['animations'] as Map?)?.cast<String, dynamic>() ?? const {};
   List<String> get languages => [for (final l in (j['languages'] as List? ?? const ['tr'])) '$l'];
 
   /// Yönetim panelinden düzenlenen arayüz metni.
@@ -161,8 +187,30 @@ class SpectreClient extends ChangeNotifier {
   Future<void> login(String username, String password) =>
       _auth(api.post(ApiConfig.ep('authLogin'), {'username': username, 'password': password}));
 
-  Future<void> register(String username, String password, String displayName) => _auth(api.post(
-      ApiConfig.ep('authRegister'), {'username': username, 'password': password, 'displayName': displayName}));
+  Future<void> register(String username, String password, String displayName, {String email = ''}) => _auth(api.post(
+      ApiConfig.ep('authRegister'),
+      {'username': username, 'password': password, 'displayName': displayName, if (email.isNotEmpty) 'email': email}));
+
+  Future<String> forgotPassword(String emailOrUsername) async {
+    final r = await api.post(ApiConfig.ep('authForgot'), {'email': emailOrUsername});
+    return '${r['message'] ?? 'Gönderildi'}';
+  }
+
+  Future<void> setEmail(String email) async {
+    me = Me(await api.patch(ApiConfig.ep('me'), {'email': email}));
+    notifyListeners();
+  }
+
+  Future<void> resendVerify() => api.patch(ApiConfig.ep('me'), {'resendVerify': true});
+
+  /// Kartla ödeme: sipariş oluşturur, ödeme sayfası adresini döner.
+  Future<String> startCardPayment(String packageId) async {
+    final r = await api.post(ApiConfig.ep('payStart'), {'packageId': packageId});
+    return '${r['paymentUrl']}';
+  }
+
+  Future<Map<String, dynamic>> support([String? text]) =>
+      text == null ? api.get(ApiConfig.ep('support')) : api.post(ApiConfig.ep('support'), {'text': text});
 
   Future<void> guest() => _auth(api.post(ApiConfig.ep('authGuest')));
 

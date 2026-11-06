@@ -4,6 +4,7 @@ import '../data/api.dart';
 import '../data/client.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
+import 'social.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -20,6 +21,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _user = TextEditingController();
   final _pass = TextEditingController();
   final _name = TextEditingController();
+  final _email = TextEditingController();
   final _passFocus = FocusNode();
 
   @override
@@ -27,6 +29,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _user.dispose();
     _pass.dispose();
     _name.dispose();
+    _email.dispose();
     _passFocus.dispose();
     super.dispose();
   }
@@ -54,7 +57,7 @@ class _LoginScreenState extends State<LoginScreen> {
       setState(() => _error = 'Kullanıcı adı ve şifre gerekli');
       return;
     }
-    _run(() => _register ? c.register(u, p, _name.text.trim()) : c.login(u, p));
+    _run(() => _register ? c.register(u, p, _name.text.trim(), email: _email.text.trim()) : c.login(u, p));
   }
 
   @override
@@ -126,6 +129,16 @@ class _LoginScreenState extends State<LoginScreen> {
                                     prefixIcon: Icon(Icons.badge_rounded)),
                               ),
                               const SizedBox(height: 10),
+                              TextField(
+                                controller: _email,
+                                keyboardType: TextInputType.emailAddress,
+                                autofillHints: const [AutofillHints.email],
+                                textInputAction: TextInputAction.next,
+                                decoration: InputDecoration(
+                                    labelText: cfg.requireEmail ? 'E-posta' : 'E-posta (şifre sıfırlama için önerilir)',
+                                    prefixIcon: const Icon(Icons.alternate_email_rounded)),
+                              ),
+                              const SizedBox(height: 10),
                             ],
                             TextField(
                               controller: _pass,
@@ -160,6 +173,14 @@ class _LoginScreenState extends State<LoginScreen> {
                                     : Text(_register ? 'Hesap oluştur' : cfg.t('login.title', 'Giriş yap')),
                               ),
                             ),
+                            if (!_register && cfg.mailReady)
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton(
+                                  onPressed: () => showForgotPassword(context, c),
+                                  child: const Text('Şifremi unuttum'),
+                                ),
+                              ),
                             if (cfg.guestLogin) ...[
                               const SizedBox(height: 10),
                               PressButton(

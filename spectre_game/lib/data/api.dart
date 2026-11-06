@@ -32,6 +32,10 @@ abstract final class ApiConfig {
     'dmThread': '/api/v1/dm/{userId}',
     'notifications': '/api/v1/notifications',
     'notificationsRead': '/api/v1/notifications/read',
+    'authForgot': '/api/v1/auth/forgot',
+    'authReset': '/api/v1/auth/reset',
+    'payStart': '/api/v1/pay/paytr/start',
+    'support': '/api/v1/support',
     'ws': '/ws',
   };
 

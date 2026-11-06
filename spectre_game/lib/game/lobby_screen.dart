@@ -6,6 +6,7 @@ import '../data/api.dart';
 import '../data/client.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
+import '../platform/open_url.dart';
 import 'social.dart';
 import 'stage_painters.dart';
 import 'table_screen.dart';
@@ -35,8 +36,32 @@ String tl(int kurus) {
   return '₺$buf,${parts[1]}';
 }
 
-class LobbyScreen extends StatelessWidget {
+class LobbyScreen extends StatefulWidget {
   const LobbyScreen({super.key});
+
+  static void openRoom(BuildContext context, RoomSummary r, {bool sit = true}) => _LobbyScreenState.openRoom(context, r, sit: sit);
+
+  @override
+  State<LobbyScreen> createState() => _LobbyScreenState();
+}
+
+class _LobbyScreenState extends State<LobbyScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Sanal POS dönüşü: ?odeme=basarili | hata
+    final r = currentQueryParam('odeme');
+    if (r != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(r == 'basarili'
+              ? 'Ödemen alındı. Onaylandığında haklar hesabına otomatik tanımlanır.'
+              : 'Ödeme tamamlanamadı. Tekrar deneyebilirsin.'),
+        ));
+      });
+    }
+  }
 
   static void openRoom(BuildContext context, RoomSummary r, {bool sit = true}) {
     final c = ClientScope.read(context);
@@ -161,13 +186,29 @@ class _Header extends StatelessWidget {
                   await client.setLightMode(!client.lightMode);
                 case 'admin':
                   Navigator.of(context).push(spectreRoute(const AdminShell()));
+                case 'support':
+                  showModalBottomSheet<void>(
+                    context: context,
+                    backgroundColor: Colors.transparent,
+                    isScrollControlled: true,
+                    builder: (_) => SupportSheet(client: client),
+                  );
+                case 'profile':
+                  showModalBottomSheet<void>(
+                    context: context,
+                    backgroundColor: Colors.transparent,
+                    isScrollControlled: true,
+                    builder: (_) => ProfileSheet(client: client),
+                  );
                 case 'logout':
                   await client.logout();
               }
             },
             itemBuilder: (_) => [
               if (cfg.marketOpen) const PopupMenuItem(value: 'market', child: Text('🛒  Market')),
+              const PopupMenuItem(value: 'profile', child: Text('👤  Profil ve paketlerim')),
               const PopupMenuItem(value: 'name', child: Text('✏️  Adımı değiştir')),
+              if (cfg.support) const PopupMenuItem(value: 'support', child: Text('💬  Destek')),
               PopupMenuItem(value: 'light', child: Text(client.lightMode ? '✨  Efektleri aç' : '🔋  Hafif mod')),
               const PopupMenuItem(value: 'admin', child: Text('🛡️  Yönetim merkezi')),
               const PopupMenuItem(value: 'logout', child: Text('🚪  Çıkış yap')),
@@ -390,7 +431,7 @@ class _MarketScreenState extends State<MarketScreen> {
                   maxCrossAxisExtent: 280,
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
-                  mainAxisExtent: 210,
+                  mainAxisExtent: 290,
                 ),
                 itemCount: pkgs.length,
                 itemBuilder: (ctx, i) => _PackageCard(p: pkgs[i], client: c),
@@ -413,6 +454,17 @@ class _PackageCard extends StatelessWidget {
     final featured = p['featured'] == true;
     final bonus = (p['bonusPercent'] as num?)?.toInt() ?? 0;
     final vip = (p['vipDays'] as num?)?.toInt() ?? 0;
+    final kind = '${p['kind'] ?? 'coins'}';
+    final period = (p['periodDays'] as num?)?.toInt() ?? 0;
+    final names = client.me?.featureNames ?? const {};
+    final feats = [for (final f in (p['features'] as List? ?? const [])) names['$f'] ?? '$f'];
+    final gifts = [
+      for (final g in (p['gifts'] as List? ?? const []))
+        if (g is Map)
+          '${client.gifts.where((x) => x.id == g['giftId']).map((x) => x.emoji).firstOrNull ?? '🎁'}×${g['qty']}'
+    ];
+    final coins = (p['totalCoins'] as num?)?.toInt() ?? 0;
+    final periodText = period <= 0 ? 'süresiz' : (period == 1 ? 'günlük' : period == 7 ? 'haftalık' : period == 30 ? 'aylık' : '$period gün');
     return GlassPanel(
       tint: featured ? SpectreColors.accent.withOpacity(0.35) : null,
       child: Column(
@@ -423,10 +475,19 @@ class _PackageCard extends StatelessWidget {
             if (featured) const Chip(label: Text('Öne çıkan'), visualDensity: VisualDensity.compact),
           ]),
           const SizedBox(height: 6),
-          Text('🪙 ${p['totalCoins']}',
-              style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: SpectreColors.gold)),
+          if (kind != 'coins' || feats.isNotEmpty)
+            Text(kind == 'subscription' ? 'Abonelik · $periodText' : 'Özellik · $periodText',
+                style: const TextStyle(color: SpectreColors.cyan, fontSize: 12, fontWeight: FontWeight.w700)),
+          if (coins > 0)
+            Text('🪙 $coins', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: SpectreColors.gold)),
           if (bonus > 0) Text('+%$bonus bonus', style: const TextStyle(color: SpectreColors.green, fontSize: 12)),
+          for (final f in feats.take(3)) Text('✓ $f', style: const TextStyle(fontSize: 12)),
+          if (feats.length > 3) Text('+${feats.length - 3} özellik', style: const TextStyle(fontSize: 12, color: SpectreColors.muted)),
+          if (gifts.isNotEmpty) Text('Hediye: ${gifts.join('  ')}', style: const TextStyle(fontSize: 12)),
           if (vip > 0) Text('👑 $vip gün VIP', style: const TextStyle(color: SpectreColors.gold, fontSize: 12)),
+          if ('${p['description'] ?? ''}'.isNotEmpty)
+            Text('${p['description']}',
+                maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: SpectreColors.muted)),
           const Spacer(),
           SizedBox(
             width: double.infinity,
@@ -443,7 +504,7 @@ class _PackageCard extends StatelessWidget {
   Future<void> _buy(BuildContext context) async {
     final pay = client.config.payment;
     final options = [
-      if (pay['paytr'] == true) ('paytr', 'Kart ile (PayTR)'),
+      if (pay['paytr'] == true && client.config.paytrReady) ('paytr', 'Kredi / banka kartı'),
       if (pay['shopier'] == true) ('shopier', 'Kart ile (Shopier)'),
       if (pay['manual'] == true) ('manual', 'Havale / EFT'),
     ];
@@ -468,6 +529,28 @@ class _PackageCard extends StatelessWidget {
       ),
     );
     if (provider == null || !context.mounted) return;
+    if (provider == 'paytr') {
+      try {
+        final url = await client.startCardPayment('${p['id']}');
+        if (!openUrl(url) && context.mounted) {
+          await showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: SpectreColors.panel,
+              title: const Text('Ödeme sayfası'),
+              content: SelectableText('Ödeme sayfası açılamadı. Bu adresi tarayıcıda açın:\n$url'),
+              actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Tamam'))],
+            ),
+          );
+        } else if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('Ödeme sayfası yeni sekmede açıldı. Ödeme onaylanınca haklar otomatik tanımlanır.')));
+        }
+      } on ApiException catch (e) {
+        if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+      return;
+    }
     try {
       final r = await client.createOrder('${p['id']}', provider);
       final id = (r['order'] as Map)['id'];

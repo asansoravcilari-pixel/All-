@@ -455,6 +455,73 @@ class _PlayerDetailDialogState extends State<PlayerDetailDialog> {
           for (final n in (u['notes'] as List? ?? const [])) Text('📝 $n', style: const TextStyle(color: SpectreColors.muted)),
         ],
         const SizedBox(height: 16),
+        Row(children: [
+          const Expanded(child: Text('Paket hakları', style: TextStyle(fontWeight: FontWeight.w800))),
+          TextButton.icon(
+            onPressed: () async {
+              final a = AdminScope.read(context);
+              final fs = jl((await a.get('/features'))['items']);
+              if (!context.mounted) return;
+              final pick = await showDialog<(String, int)>(
+                context: context,
+                builder: (ctx) {
+                  var key = fs.isEmpty ? '' : '${fs.first['key']}';
+                  final days = TextEditingController(text: '30');
+                  return StatefulBuilder(
+                    builder: (ctx, set) => AlertDialog(
+                      backgroundColor: SpectreColors.panel,
+                      title: const Text('Hak tanımla'),
+                      content: Column(mainAxisSize: MainAxisSize.min, children: [
+                        DropdownButtonFormField<String>(
+                          value: key.isEmpty ? null : key,
+                          items: [for (final f in fs) DropdownMenuItem(value: '${f['key']}', child: Text('${f['name']}'))],
+                          onChanged: (v) => set(() => key = v ?? key),
+                        ),
+                        TextField(
+                            controller: days,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(labelText: 'Gün (0 = süresiz)')),
+                      ]),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Vazgeç')),
+                        FilledButton(
+                            onPressed: () => Navigator.pop(ctx, (key, int.tryParse(days.text) ?? 30)), child: const Text('Tanımla')),
+                      ],
+                    ),
+                  );
+                },
+              );
+              if (pick != null) await _do({'action': 'grant', 'feature': pick.$1, 'days': pick.$2}, ok: 'Hak tanımlandı');
+            },
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text('Hak tanımla'),
+          ),
+        ]),
+        if ((u['entitlements'] as Map? ?? const {}).isEmpty)
+          const Text('Aktif hak yok', style: TextStyle(color: SpectreColors.muted)),
+        for (final e in (u['entitlements'] as Map? ?? const {}).entries)
+          ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.verified_rounded, color: SpectreColors.green, size: 18),
+            title: Text('${(u['featureNames'] as Map?)?[e.key] ?? e.key}'),
+            subtitle: Text(DateTime.tryParse('${e.value}')?.year == 2100
+                ? 'süresiz'
+                : 'bitiş ${hm(DateTime.tryParse('${e.value}')?.toLocal() ?? DateTime.now())}'),
+            trailing: TextButton(onPressed: () => _do({'action': 'revoke', 'feature': e.key}), child: const Text('Kaldır')),
+          ),
+        if ((u['inventory'] as Map? ?? const {}).isNotEmpty) ...[
+          const SizedBox(height: 6),
+          const Text('Hediye envanteri', style: TextStyle(fontWeight: FontWeight.w800)),
+          Wrap(spacing: 6, children: [
+            for (final e in (u['inventory'] as Map).entries)
+              InputChip(
+                label: Text('${e.key} ×${e.value}'),
+                onDeleted: () => _do({'action': 'inventory', 'giftId': e.key, 'qty': -(e.value as num).toInt()}),
+              ),
+          ]),
+        ],
+        const SizedBox(height: 16),
         const Text('Coin hareketleri', style: TextStyle(fontWeight: FontWeight.w800)),
         if (ledger.isEmpty) const Text('Kayıt yok', style: TextStyle(color: SpectreColors.muted)),
         for (final e in ledger)

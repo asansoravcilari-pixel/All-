@@ -40,7 +40,7 @@ Tarayıcıda `http://localhost:8090` açın.
 
 ```bash
 cd packages/spectre_core && dart test     # oyun kuralları (8)
-cd server && dart test                    # gerçek HTTP + WebSocket uçtan uca (5)
+cd server && dart test                    # gerçek HTTP + WebSocket uçtan uca (12)
 flutter test                              # istemci masa durumu (4)
 ```
 
@@ -60,10 +60,22 @@ flutter test                              # istemci masa durumu (4)
   merkezinden eklenir/yeniden adlandırılır.
 - **Sunucu yetkili:** Tur zamanlayıcısı, hedef seçimi, coin düşümü sunucuda.
   Hız sınırları, yasaklı kelime, IP engeli, hatalı giriş kilidi.
-- **Yönetim merkezi:** Kontrol Merkezi, Oyuncular (coin, sustur, masadan çıkar,
-  askıya al, yasakla, rol, uyarı, not, ad/şifre sıfırlama), Canlı Masalar,
-  Ekonomi & Finans, Market, Siparişler & Ödeme, Sistem & Güvenlik
-  (yöneticiler, şifre değiştirme, denetim kaydı), Marka & Oyun.
+- **Paketler ve haklar:** coin, abonelik (günlük/haftalık/aylık/özel gün) ve tekli
+  özellik paketleri; pakete dahil özellikler ve hediyeler. Ödeme onaylanınca
+  haklar otomatik tanımlanır, süresi gelince otomatik biter ve özellik kilitlenir
+  (3 gün önce uyarı). Kilitlenebilir özellikler: özel mesaj, toplu hediye,
+  otomatik çeviri, profil fotoğrafı, VIP rozeti + admin'in eklediği özellikler.
+- **Sanal POS (PayTR iFrame):** kartla ödeme; imzalı bildirim gelince sipariş
+  otomatik onaylanır. Havale/EFT yönetici onaylı.
+- **Mail:** SMTP; hoş geldin/doğrulama, şifremi unuttum, satın alma, abonelik
+  bitiyor/bitti, destek yanıtı şablonları (admin'den düzenlenir, test gönderimi).
+- **Destek robotu:** bilgi tabanı, paket/sipariş sorgusu, şifre sıfırlama,
+  yetkiliye aktarma, kural dışı ifadede kilit; admin gelen kutusu.
+- **Yönetim merkezi:** Kontrol Merkezi, Oyuncular (coin, hak tanımlama/kaldırma,
+  envanter, sustur, yasakla…), Canlı Masalar, Ekonomi & Finans, Market (paketler,
+  özellik kilitleri, hediyeler), Siparişler & Ödeme (PayTR), Mail & Şablonlar,
+  Destek, Sistem & Güvenlik, Görünüm (arka plan, logo), Metinler & Pencereler,
+  Marka & Oyun, Animasyonlar, Bağlantı & Çeviri.
 
 API ayrıntıları: [`docs/API.md`](docs/API.md) · Geçiş planı: [`docs/GECIS_PLANI.md`](docs/GECIS_PLANI.md)
 

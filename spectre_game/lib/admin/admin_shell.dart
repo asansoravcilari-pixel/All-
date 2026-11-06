@@ -7,6 +7,7 @@ import 'admin_client.dart';
 import 'pages_brand.dart';
 import 'pages_commerce.dart';
 import 'pages_core.dart';
+import 'pages_ops.dart';
 import 'pages_system.dart';
 
 class AdminSection {
@@ -23,10 +24,13 @@ final adminSections = <AdminSection>[
   AdminSection('Ekonomi & Finans', Icons.query_stats_rounded, () => const EconomyPage()),
   AdminSection('Market', Icons.storefront_rounded, () => const MarketAdminPage()),
   AdminSection('Siparişler & Ödeme', Icons.receipt_long_rounded, () => const OrdersPage()),
+  AdminSection('Mail & Şablonlar', Icons.mail_rounded, () => const MailPage()),
+  AdminSection('Destek', Icons.support_agent_rounded, () => const SupportAdminPage()),
   AdminSection('Sistem & Güvenlik', Icons.shield_rounded, () => const SystemPage()),
   AdminSection('Görünüm', Icons.palette_rounded, () => const AppearancePage()),
   AdminSection('Metinler & Pencereler', Icons.text_fields_rounded, () => const TextsPage()),
   AdminSection('Marka & Oyun', Icons.tune_rounded, () => const BrandGamePage()),
+  AdminSection('Animasyonlar', Icons.animation_rounded, () => const AnimationsPage()),
   AdminSection('Bağlantı & Çeviri', Icons.alt_route_rounded, () => const ConnectionPage()),
 ];
 

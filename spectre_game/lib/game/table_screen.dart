@@ -183,6 +183,15 @@ class _TableScreenState extends State<TableScreen> {
             _openTables();
           },
         ),
+        if (c.config.support)
+          ListTile(
+            leading: const Icon(Icons.support_agent_rounded),
+            title: const Text('Destek'),
+            onTap: () {
+              Navigator.pop(context);
+              _sheet(SupportSheet(client: c));
+            },
+          ),
         ListTile(
           leading: const Icon(Icons.home_rounded),
           title: const Text('Lobiye dön'),
@@ -232,6 +241,7 @@ class _TableScreenState extends State<TableScreen> {
                     meId: meId,
                     onSeatTap: _onSeatTap,
                     light: c.lightMode,
+                    anim: c.config.animations,
                     centre: _RoundCentre(room: t, client: c, seated: seated),
                   ),
           );
@@ -760,7 +770,10 @@ class _Composer extends StatefulWidget {
 class _ComposerState extends State<_Composer> {
   final _ctl = TextEditingController();
 
-  static const _reactions = ['❤️', '😂', '😮', '👏', '🔥', '😍'];
+  List<String> get _reactions {
+    final r = '${widget.client.config.animations['reactions'] ?? ''}'.split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
+    return r.isEmpty ? const ['❤️', '😂', '😮', '👏', '🔥', '😍'] : r;
+  }
 
   @override
   void dispose() {
@@ -850,8 +863,14 @@ class _ComposerState extends State<_Composer> {
         btn(Icons.emoji_emotions_rounded, c.t('composer.react', 'Tepki'), seated ? _react : null),
         btn(Icons.card_giftcard_rounded, c.t('composer.gift', 'Oyuncuya hediye'), seated && hasGifts ? widget.onGift : null,
             color: SpectreColors.gold),
-        btn(Icons.volunteer_activism_rounded, c.t('composer.groupGift', 'Toplu hediye'),
-            seated && hasGifts ? widget.onGroupGift : null,
+        btn(
+            c.me?.isLocked('groupGift') == true ? Icons.lock_rounded : Icons.volunteer_activism_rounded,
+            c.t('composer.groupGift', 'Toplu hediye'),
+            !(seated && hasGifts)
+                ? null
+                : c.me?.isLocked('groupGift') == true
+                    ? () => showLocked(context, c, 'groupGift')
+                    : widget.onGroupGift,
             color: SpectreColors.gold),
         btn(Icons.mail_rounded, c.t('composer.messages', 'Mesaj kutusu'), widget.onMessages, badge: c.me?.unreadDms ?? 0),
         btn(Icons.send_rounded, 'Gönder', seated ? _send : null, color: SpectreColors.accent),
@@ -1103,14 +1122,16 @@ class _PlayerSheetState extends State<_PlayerSheet> {
                 child: PressButton(
                   onTap: widget.client.me?.guest == true
                       ? null
-                      : () {
-                          Navigator.pop(context);
-                          widget.onMessage();
-                        },
-                  child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Icon(Icons.mail_rounded),
-                    SizedBox(width: 8),
-                    Text('Mesaj gönder'),
+                      : widget.client.me?.isLocked('dm') == true
+                          ? () => showLocked(context, widget.client, 'dm')
+                          : () {
+                              Navigator.pop(context);
+                              widget.onMessage();
+                            },
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Icon(widget.client.me?.isLocked('dm') == true ? Icons.lock_rounded : Icons.mail_rounded),
+                    const SizedBox(width: 8),
+                    const Text('Mesaj gönder'),
                   ]),
                 ),
               ),
@@ -1234,7 +1255,8 @@ class _GiftSheetState extends State<_GiftSheet> {
               itemCount: gifts.length,
               itemBuilder: (_, i) {
                 final g = gifts[i];
-                final cost = widget.group ? g.price * others.length : g.price;
+                final owned = c.me?.inventory[g.id] ?? 0;
+                final cost = widget.group ? g.price * others.length : (owned > 0 ? 0 : g.price);
                 final afford = others.isNotEmpty && (c.me?.coins ?? 0) >= cost;
                 return PressButton(
                   filled: false,
@@ -1255,7 +1277,8 @@ class _GiftSheetState extends State<_GiftSheet> {
                     Text(g.emoji, style: const TextStyle(fontSize: 30)),
                     const SizedBox(height: 4),
                     Text(g.name, style: const TextStyle(fontSize: 11, color: SpectreColors.ink)),
-                    Text('🪙 $cost', style: const TextStyle(fontSize: 11)),
+                    Text(!widget.group && owned > 0 ? '🎁 ×$owned' : '🪙 $cost',
+                        style: TextStyle(fontSize: 11, color: !widget.group && owned > 0 ? SpectreColors.green : null)),
                   ]),
                 );
               },

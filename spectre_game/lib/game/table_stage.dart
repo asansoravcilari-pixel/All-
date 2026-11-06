@@ -35,6 +35,7 @@ class TableStage extends StatefulWidget {
     required this.onSeatTap,
     required this.light,
     this.centre,
+    this.anim = const {},
   });
 
   final RoomState table;
@@ -42,6 +43,9 @@ class TableStage extends StatefulWidget {
   final void Function(int seat) onSeatTap;
   final bool light;
   final Widget? centre;
+
+  /// Yönetim panelinden animasyon ayarları.
+  final Map<String, dynamic> anim;
 
   @override
   State<TableStage> createState() => _TableStageState();
@@ -109,7 +113,7 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
                     final spinning = r.phase == RoundPhase.spinning;
                     final myTurn =
                         r.active && r.phase == RoundPhase.idle && table.seats[r.spinnerSeat].player?.userId == widget.meId;
-                    final wobble = myTurn && !widget.light ? math.sin(time * 5) * 0.05 : 0.0;
+                    final wobble = myTurn && !widget.light && widget.anim['bottleWobble'] != false ? math.sin(time * 5) * 0.05 : 0.0;
                     final glow = spinning
                         ? (1 - table.phaseProgress(now)).clamp(0.2, 1.0)
                         : (myTurn ? 0.35 + 0.25 * math.sin(time * 4) : 0.0);
@@ -119,8 +123,10 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
                           painter: SquareFloorPainter(
                             theme: theme,
                             center: geo.center,
-                            target: showBeam && r.targetSeat != null ? geo.seat(r.targetSeat!) : null,
-                            time: widget.light ? 0 : time,
+                            target: showBeam && r.targetSeat != null && widget.anim['targetBeam'] != false
+                                ? geo.seat(r.targetSeat!)
+                                : null,
+                            time: widget.light || widget.anim['floorGlow'] == false ? 0 : time,
                           ),
                         ),
                       ),
@@ -156,7 +162,7 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
                 isMe: seat.player?.userId == widget.meId,
                 onTap: () => widget.onSeatTap(seat.index),
               ),
-            Positioned.fill(child: IgnorePointer(child: _FxLayer(key: _fx, geo: geo, light: widget.light))),
+            Positioned.fill(child: IgnorePointer(child: _FxLayer(key: _fx, geo: geo, light: widget.light, anim: widget.anim))),
           ],
         );
       }),
@@ -450,9 +456,10 @@ class _Fx {
 }
 
 class _FxLayer extends StatefulWidget {
-  const _FxLayer({super.key, required this.geo, required this.light});
+  const _FxLayer({super.key, required this.geo, required this.light, this.anim = const {}});
   final StageGeometry geo;
   final bool light;
+  final Map<String, dynamic> anim;
 
   @override
   State<_FxLayer> createState() => _FxLayerState();
@@ -467,13 +474,14 @@ class _FxLayerState extends State<_FxLayer> with TickerProviderStateMixin {
     final g = widget.geo;
     switch (e) {
       case FxGift(:final fromSeat, :final toSeat, :final gift):
-        _spawn(const Duration(milliseconds: 1300), (t) => _flying(g.seat(fromSeat), g.seat(toSeat), gift.emoji, t));
+        final ms = ((widget.anim['giftFlightMs'] as num?) ?? 1300).toInt().clamp(300, 5000);
+        _spawn(Duration(milliseconds: ms), (t) => _flying(g.seat(fromSeat), g.seat(toSeat), gift.emoji, t));
       case FxReaction(:final seat, :final emoji):
         final dx = (_rnd.nextDouble() - 0.5) * 30;
         _spawn(const Duration(milliseconds: 1600), (t) => _floatUp(g.seat(seat) + Offset(dx, 0), emoji, t));
       case FxMatch(:final a, :final b, :final success):
         if (success) {
-          final n = widget.light ? 6 : 16;
+          final n = widget.light ? 6 : ((widget.anim['burstCount'] as num?) ?? 16).toInt().clamp(0, 60);
           for (var i = 0; i < n; i++) {
             final ang = _rnd.nextDouble() * 2 * math.pi;
             final dist = 40 + _rnd.nextDouble() * 70;
@@ -482,10 +490,12 @@ class _FxLayerState extends State<_FxLayer> with TickerProviderStateMixin {
           }
           _spawn(const Duration(milliseconds: 1400), (t) => _pulse(g.seat(a), g.seatSide, SpectreColors.pink, t));
           _spawn(const Duration(milliseconds: 1400), (t) => _pulse(g.seat(b), g.seatSide, SpectreColors.pink, t));
-          _spawn(const Duration(milliseconds: 1600), (t) => _centreIcon(g.center, '💞', t, grow: true));
+          final matchEmoji = '${widget.anim['matchEmoji'] ?? '💞'}';
+          _spawn(const Duration(milliseconds: 1600), (t) => _centreIcon(g.center, matchEmoji, t, grow: true));
         } else {
           // Red: ortada kırık kalp, iki koltukta kırmızı sönen çerçeve
-          _spawn(const Duration(milliseconds: 1400), (t) => _centreIcon(g.center, '💔', t, shake: true));
+          final rejectEmoji = '${widget.anim['rejectEmoji'] ?? '💔'}';
+          _spawn(const Duration(milliseconds: 1400), (t) => _centreIcon(g.center, rejectEmoji, t, shake: true));
           _spawn(const Duration(milliseconds: 1000), (t) => _pulse(g.seat(a), g.seatSide, SpectreColors.red, t));
           _spawn(const Duration(milliseconds: 1000), (t) => _pulse(g.seat(b), g.seatSide, SpectreColors.red, t));
         }
