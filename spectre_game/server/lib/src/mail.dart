@@ -40,6 +40,30 @@ const Map<String, Map<String, String>> kDefaultMailTemplates = {
     'body': '<p>Merhaba {{name}},</p><p><b>{{feature}}</b> hakkının süresi doldu ve özellik kilitlendi.</p>'
         '<p>Yeniden açmak için marketi ziyaret et.</p>',
   },
+  'paymentSuccess': {
+    'name': 'Ödeme başarılı',
+    'subject': '{{brand}} — ödemen alındı ({{order}})',
+    'body': '<p>Merhaba {{name}},</p><p><b>{{package}}</b> için {{amount}} tutarındaki ödemen başarıyla alındı.</p>'
+        '<p>Sipariş no: {{order}}</p>',
+  },
+  'paymentFailed': {
+    'name': 'Ödeme başarısız',
+    'subject': '{{brand}} — ödeme tamamlanamadı ({{order}})',
+    'body': '<p>Merhaba {{name}},</p><p><b>{{package}}</b> için ödemen tamamlanamadı.</p>'
+        '<p>Neden: {{reason}}</p><p>Marketten tekrar deneyebilirsin.</p>',
+  },
+  'loginSuccess': {
+    'name': 'Oturum açıldı',
+    'subject': '{{brand}} — hesabına yeni giriş',
+    'body': '<p>Merhaba {{name}},</p><p>Hesabına {{time}} tarihinde {{ip}} adresinden giriş yapıldı.</p>'
+        '<p>Bu sen değilsen hemen şifreni değiştir: <a href="{{link}}">{{link}}</a></p>',
+  },
+  'loginFailed': {
+    'name': 'Başarısız giriş denemesi',
+    'subject': '{{brand}} — hesabına başarısız giriş denemeleri',
+    'body': '<p>Merhaba {{name}},</p><p>Hesabına {{ip}} adresinden {{count}} başarısız giriş denemesi yapıldı ({{time}}).</p>'
+        '<p>Bu sen değilsen şifreni sıfırla: <a href="{{link}}">{{link}}</a></p>',
+  },
   'supportReply': {
     'name': 'Destek yanıtı',
     'subject': '{{brand}} destek — yeni yanıt',

@@ -492,4 +492,122 @@ void main() {
       expect(ls, 423);
     });
   });
+
+  group('otomasyonlar', () {
+    late String admin;
+    late String roomId;
+
+    Future<(String, String)> player(String name) async {
+      final (_, r) = await call('POST', '/api/v1/auth/register', body: {'username': name, 'password': 'sifre-$name-1', 'email': '$name@ornek.com'});
+      return (r['token'] as String, (r['me'] as Map)['id'] as String);
+    }
+
+    Future<void> grant(String userId, String feature) =>
+        call('POST', '/admin/api/v1/users/$userId/action', token: admin, body: {'action': 'grant', 'feature': feature, 'days': 30});
+
+    setUp(() async {
+      final (_, a) = await call('POST', '/admin/api/v1/login', body: {'username': 'patron', 'password': 'cok-gizli-123'});
+      admin = a['token'] as String;
+      await call('PUT', '/admin/api/v1/settings', token: admin, body: {
+        'settings': {'kickCost': 10, 'kickCooldownSec': 0, 'kickBanMinutes': 5, 'autoDelayMs': 200}
+      });
+      final (_, room) = await call('POST', '/admin/api/v1/rooms', token: admin, body: {'name': 'Oto ${DateTime.now().microsecond}'});
+      roomId = room['id'] as String;
+    });
+
+    test('tekme, Save koruması ve Oto Tekme', () async {
+      final (ta, ia) = await player('tekmeci');
+      final (tb, ib) = await player('hedef');
+      final (tc, ic) = await player('korunan');
+      final wa = await WsProbe.connect(ta), wb = await WsProbe.connect(tb), wc = await WsProbe.connect(tc);
+      for (final w in [wa, wb, wc]) {
+        await w.next('hello');
+      }
+      wa.send({'op': 'join', 'roomId': roomId, 'seat': 0});
+      await wa.next(Ev.snapshot);
+      wb.send({'op': 'join', 'roomId': roomId, 'seat': 1});
+      await wb.next(Ev.snapshot);
+      wc.send({'op': 'join', 'roomId': roomId, 'seat': 2});
+      await wc.next(Ev.snapshot);
+
+      // Save: C kendini korur (hak gerekir)
+      final (locked, _) = await call('PUT', '/api/v1/automation', token: tc, body: {'save': {'selfProtect': true}});
+      expect(locked, 403);
+      await grant(ic, 'save');
+      final (ok, _) = await call('PUT', '/api/v1/automation', token: tc, body: {'save': {'selfProtect': true}});
+      expect(ok, 200);
+
+      wa.send({'op': 'kick', 'seat': 2});
+      final e1 = await wa.next(Ev.error);
+      expect(e1['message'], contains('korumalı'));
+
+      wa.send({'op': 'kick', 'seat': 1});
+      final vac = await wa.next(Ev.seatVacated, where: (d) => d['index'] == 1);
+      expect(vac['playerId'], ib);
+      final kicked = await wb.next('room.kicked');
+      expect(kicked['minutes'], 5);
+      final me = await wa.next(Ev.me);
+      expect(me['coins'], 200 - 10);
+      wb.send({'op': 'join', 'roomId': roomId});
+      final ban = await wb.next(Ev.error);
+      expect(ban['message'], contains('çıkarıldın'));
+
+      // Oto Tekme: A'nın listesine D eklenir, D oturunca çıkarılır
+      final (td, id) = await player('istenmeyen');
+      await grant(ia, 'autoKick');
+      final (st, _) = await call('PUT', '/api/v1/automation', token: ta, body: {
+        'autoKick': {'enabled': true, 'list': [id], 'delayMs': 300}
+      });
+      expect(st, 200);
+      final wd = await WsProbe.connect(td);
+      await wd.next('hello');
+      wd.send({'op': 'join', 'roomId': roomId, 'seat': 5});
+      await wd.next(Ev.snapshot);
+      final out = await wa.next(Ev.seatVacated, where: (d) => d['index'] == 5);
+      expect(out['playerId'], id);
+      final (_, auto) = await call('GET', '/api/v1/automation', token: ta);
+      expect(((auto['players'] as Map)[id] as Map)['name'], 'istenmeyen');
+      for (final w in [wa, wb, wc, wd]) {
+        await w.ws.close();
+      }
+    });
+
+    test('Oto Çevir + Oto Öpücük: tur kendiliğinden eşleşmeyle biter', () async {
+      final (ta, ia) = await player('otoa');
+      final (tb, ib) = await player('otob');
+      for (final (t, i) in [(ta, ia), (tb, ib)]) {
+        await grant(i, 'autoSpin');
+        await grant(i, 'autoKiss');
+        final (st, _) = await call('PUT', '/api/v1/automation', token: t, body: {
+          'autoSpin': {'enabled': true},
+          'autoKiss': {'enabled': true, 'mode': 'all'},
+        });
+        expect(st, 200);
+      }
+      final wa = await WsProbe.connect(ta), wb = await WsProbe.connect(tb);
+      await wa.next('hello');
+      await wb.next('hello');
+      wa.send({'op': 'join', 'roomId': roomId, 'seat': 0});
+      await wa.next(Ev.snapshot);
+      wb.send({'op': 'join', 'roomId': roomId, 'seat': 6});
+      final m = await wa.next(Ev.match);
+      expect(m['success'], isTrue);
+      await wa.ws.close();
+      await wb.ws.close();
+    });
+
+    test('başarısız girişte hesap sahibine uyarı e-postası', () async {
+      final sent = <String>[];
+      server.mailSender = (c, to, subject, html) async => sent.add('$to|$subject');
+      await call('PUT', '/admin/api/v1/settings', token: admin, body: {
+        'settings': {'mailEnabled': true, 'smtpHost': 'smtp.ornek', 'mailFrom': 'oyun@ornek.com', 'publicBaseUrl': 'https://o.com', 'mailOnLoginFail': true}
+      });
+      await player('dikkat');
+      for (var i = 0; i < 3; i++) {
+        await call('POST', '/api/v1/auth/login', body: {'username': 'dikkat', 'password': 'yanlis-$i'});
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(sent.where((x) => x.startsWith('dikkat@ornek.com|') && x.contains('başarısız')).length, 1);
+    });
+  });
 }

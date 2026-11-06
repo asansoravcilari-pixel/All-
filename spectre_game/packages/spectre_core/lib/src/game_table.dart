@@ -106,6 +106,12 @@ class GameTable {
 
   bool closed = false;
   bool locked = false;
+
+  /// Tekmelenen oyuncu → masaya tekrar girebileceği zaman.
+  final Map<String, DateTime> kickedUntil = {};
+
+  /// Hedef seçiminde ağırlık (Şans). Varsayılan 1; dönen değer 1..11 arası.
+  int Function(String spinnerId, String candidateId)? targetWeight;
   int totalMatches = 0;
   int totalGifts = 0;
 
@@ -205,6 +211,8 @@ class GameTable {
       return existing;
     }
     if (closed || locked) return null;
+    final ban = kickedUntil[p.userId];
+    if (ban != null && now.isBefore(ban)) return null;
     SeatView? target;
     if (preferredSeat != null && preferredSeat >= 0 && preferredSeat < seats.length && seats[preferredSeat].player == null) {
       target = seats[preferredSeat];
@@ -284,7 +292,7 @@ class GameTable {
     final candidates =
         seats.where((s) => s.player != null && s.index != spinnerSeat).map((s) => s.index).toList();
     if (candidates.isEmpty) return false;
-    final target = candidates[_rnd.nextInt(candidates.length)];
+    final target = _pickTarget(candidates);
     // Şişenin ucu hedef koltuğa baksın: en az 4 tam tur + koltuk dilimi içinde küçük sapma.
     final targetAngle = seatAngle(target) + math.pi / 2;
     final current = bottleAngle % (2 * math.pi);
@@ -304,6 +312,29 @@ class GameTable {
     roundNo += 1;
     seats[spinnerSeat].presence = Presence.spinning;
     _changed();
+    return true;
+  }
+
+  int _pickTarget(List<int> candidates) {
+    final w = targetWeight;
+    final spinnerId = seats[spinnerSeat].player?.userId;
+    if (w == null || spinnerId == null) return candidates[_rnd.nextInt(candidates.length)];
+    final weights = [for (final c in candidates) w(spinnerId, seats[c].player!.userId).clamp(1, 11)];
+    final total = weights.fold(0, (a, b) => a + b);
+    var r = _rnd.nextInt(total);
+    for (var i = 0; i < candidates.length; i++) {
+      r -= weights[i];
+      if (r < 0) return candidates[i];
+    }
+    return candidates.last;
+  }
+
+  /// Oyuncuyu masadan çıkarır; [banFor] süresince bu masaya oturamaz.
+  bool kick(String userId, DateTime now, {required String byName, Duration banFor = const Duration(minutes: 5)}) {
+    final idx = seatOf(userId);
+    if (idx == null) return false;
+    kickedUntil[userId] = now.add(banFor);
+    leave(userId, now, reason: '$byName tarafından masadan çıkarıldı');
     return true;
   }
 

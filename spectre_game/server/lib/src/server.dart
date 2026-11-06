@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:spectre_core/spectre_core.dart';
 
 import 'auth.dart';
+import 'automation.dart';
 import 'mail.dart';
 import 'paytr.dart';
 import 'store.dart';
@@ -99,6 +100,12 @@ class SpectreServer {
     for (final f in kBuiltinFeatures) {
       if (store.feature(f.key) == null) store.features.add(FeatureRec.fromJson(f.toJson()));
     }
+    for (final e in kAutomationFeatures.entries) {
+      if (store.feature(e.key) == null) {
+        store.features.add(FeatureRec(
+            key: e.key, name: e.value.$1, description: e.value.$2, locked: kAutomationLockedByDefault.contains(e.key), builtin: true));
+      }
+    }
     if (store.kb.isEmpty && store.users.isEmpty) store.kb.addAll(kDefaultKb);
     await _ensureOwner(adminUser, adminPassword);
     _http = await HttpServer.bind(address ?? InternetAddress.anyIPv4, port);
@@ -163,6 +170,12 @@ class SpectreServer {
       ..locked = r.locked
       ..closed = r.closed;
     tables[r.id] = t;
+    t.targetWeight = (spinnerId, candidateId) {
+      final u = store.users[spinnerId];
+      if (u == null || !allowed(u, 'luck') || !autoOn(u.auto, 'luck')) return 1;
+      final v = ((u.auto['luck'] as Map?)?['list'] as Map?)?[candidateId];
+      return v is num ? 1 + v.toInt().clamp(1, 10) : 1;
+    };
     _tableSubs[r.id] = t.events.listen((e) => _onTableEvent(t, e));
     return t;
   }
@@ -182,9 +195,189 @@ class SpectreServer {
         final u = store.users[t.seats[beforeSpinner].player?.userId];
         if (u != null) u.spins++;
       }
+      _autoTick(t, now);
       if (_sentVersion[t.id] != t.version) {
         _sentVersion[t.id] = t.version;
         _toChannel(roomChannel(t.id), Ev.snapshot, t.snapshot(now).toJson());
+      }
+    }
+    // Zamanı gelen bekleyen otomasyon işlemleri
+    final due = _pending.entries.where((e) => !now.isBefore(e.value.$1)).toList();
+    for (final e in due) {
+      _pending.remove(e.key);
+      e.value.$2();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Otomasyon motoru (sunucu tarafı)
+  // ---------------------------------------------------------------------------
+
+  /// Gerçek "oturma" olaylarını (bilgi güncellemesinden ayırmak için) işaretler.
+  final Set<String> _justJoined = {};
+
+  int? _joinTable(GameTable t, UserRec u, DateTime now, {int? seat}) {
+    if (t.seatOf(u.id) == null) _justJoined.add('${t.id}:${u.id}');
+    final r = t.join(_seatPlayer(u), now, preferredSeat: seat);
+    _justJoined.remove('${t.id}:${u.id}');
+    return r;
+  }
+
+  /// anahtar → (zaman, işlem)
+  final Map<String, (DateTime, void Function())> _pending = {};
+  final Map<String, DateTime> _lowSince = {};
+  final Map<String, DateTime> _greeted = {};
+  final Map<String, List<DateTime>> _greetTimes = {};
+
+  Duration get _autoDelay => Duration(milliseconds: store.settings.autoDelayMs);
+
+  bool _autoActive(UserRec u, String key) => allowed(u, key) && autoOn(u.auto, key) && isOnline(u.id);
+
+  void _schedule(String key, Duration after, void Function() f) {
+    _pending.putIfAbsent(key, () => (DateTime.now().add(after), f));
+  }
+
+  void _autoTick(GameTable t, DateTime now) {
+    if (t.closed || t.occupied < 2) return;
+    // Oto Çevir
+    if (t.phase == RoundPhase.idle) {
+      final sp = t.seats[t.spinnerSeat].player;
+      final u = sp == null ? null : store.users[sp.userId];
+      if (u != null && _autoActive(u, 'autoSpin')) {
+        final round = t.roundNo;
+        _schedule('spin:${t.id}:$round', _autoDelay, () {
+          if (t.roundNo == round && t.phase == RoundPhase.idle && t.seats[t.spinnerSeat].player?.userId == u.id) {
+            if (t.spin(u.id, DateTime.now())) u.spins++;
+          }
+        });
+      }
+    }
+    // Oto Öpücük / Otomatik Red
+    if (t.phase == RoundPhase.deciding && t.targetSeat != null) {
+      final a = t.seats[t.spinnerSeat].player, b = t.seats[t.targetSeat!].player;
+      if (a != null && b != null) {
+        for (final (me, other, decided) in [(a, b, t.spinnerAccepted), (b, a, t.targetAccepted)]) {
+          if (decided != null) continue;
+          final u = store.users[me.userId];
+          if (u == null || !isOnline(u.id)) continue;
+          bool? choice;
+          if (allowed(u, 'autoReject') && autoOn(u.auto, 'autoReject') && autoList(u.auto, 'autoReject').contains(other.userId)) {
+            choice = false;
+          } else if (allowed(u, 'autoKiss') && autoOn(u.auto, 'autoKiss')) {
+            final mode = (u.auto['autoKiss'] as Map?)?['mode'];
+            if (mode != 'list' || autoList(u.auto, 'autoKiss').contains(other.userId)) choice = true;
+          }
+          if (choice != null) {
+            final round = t.roundNo;
+            final c = choice;
+            _schedule('decide:${t.id}:$round:${u.id}', _autoDelay, () {
+              if (t.roundNo == round) t.decide(u.id, c, DateTime.now());
+            });
+          }
+        }
+      }
+    }
+    // Masa Değiştir: masa boşalınca kalabalık masaya geç
+    if (t.phase == RoundPhase.idle) {
+      for (final p in t.players.toList()) {
+        final u = store.users[p.userId];
+        if (u == null || !_autoActive(u, 'autoSwap')) continue;
+        final min = ((u.auto['autoSwap'] as Map?)?['minPlayers'] as num? ?? 4).toInt();
+        final key = '${t.id}:${u.id}';
+        if (t.playing >= min) {
+          _lowSince.remove(key);
+          continue;
+        }
+        final since = _lowSince.putIfAbsent(key, () => now);
+        if (now.difference(since).inSeconds < 20) continue;
+        final best = _bestTable(exclude: t.id);
+        if (best != null && best.playing > t.playing) {
+          _lowSince.remove(key);
+          _moveTo(u, best, now);
+        }
+      }
+    }
+  }
+
+  GameTable? _bestTable({String? exclude}) {
+    final open = tables.values.where((x) => !x.closed && !x.locked && !x.isFull && x.id != exclude).toList()
+      ..sort((a, b) => b.playing.compareTo(a.playing));
+    return open.firstOrNull;
+  }
+
+  void _moveTo(UserRec u, GameTable t, DateTime now) {
+    tableOf(u.id)?.leave(u.id, now);
+    if (_joinTable(t, u, now) == null) return;
+    for (final c in _clients.where((c) => c.userId == u.id)) {
+      c.channels.removeWhere((ch) => ch.startsWith('room'));
+      c.channels.add(roomChannel(t.id));
+      c.send({'channel': null, 'event': 'room.moved', 'data': {'roomId': t.id, 'name': t.name}});
+      c.send({'channel': roomChannel(t.id), 'event': Ev.snapshot, 'data': t.snapshot(now).toJson()});
+    }
+  }
+
+  /// Bu kullanıcı korumalı mı? (Kendimi Koru açık + Save hakkı)
+  bool _protected(UserRec target) =>
+      allowed(target, 'save') && (target.auto['save'] as Map?)?['selfProtect'] == true && store.feature('save') != null;
+
+  /// Tekme; hata mesajı ya da null döner.
+  String? kickPlayer(UserRec kicker, GameTable t, String targetId, {bool auto = false}) {
+    final s = store.settings;
+    final now = DateTime.now();
+    if (!allowed(kicker, 'kick')) return _lockedMsg('kick');
+    if (targetId == kicker.id) return 'Kendini tekmeleyemezsin';
+    if (t.seatOf(kicker.id) == null) return 'Önce masaya otur';
+    if (t.seatOf(targetId) == null) return 'Oyuncu masada değil';
+    final target = store.users[targetId];
+    if (target == null) return 'Oyuncu yok';
+    if (autoList(kicker.auto, 'save').contains(targetId)) return '${target.displayName} koruma listende';
+    if (_protected(target)) return '${target.displayName} korumalı (Save)';
+    final last = kicker.lastKickAt;
+    if (last != null && now.difference(last).inSeconds < s.kickCooldownSec) {
+      return 'Tekme için ${s.kickCooldownSec - now.difference(last).inSeconds} sn bekle';
+    }
+    if (kicker.coins < s.kickCost) return 'Tekme için ${s.kickCost} coin gerekli';
+    kicker.coins -= s.kickCost;
+    kicker.lastKickAt = now;
+    if (s.kickCost > 0) store.addLedger(LedgerRec(kicker.id, 'kick', -s.kickCost, 'Tekme → ${target.displayName}'));
+    t.kick(targetId, now, byName: kicker.displayName, banFor: Duration(minutes: s.kickBanMinutes));
+    _notify(target.id, 'admin', '${kicker.displayName} seni ${t.name} masasından çıkardı${auto ? ' (oto)' : ''}');
+    _toUser(kicker.id, Ev.me, meJson(kicker));
+    store.log(kicker.username, auto ? 'Oto tekme' : 'Tekme', '${target.username} @ ${t.name}');
+    for (final c in _clients.where((c) => c.userId == targetId)) {
+      c.send({'channel': null, 'event': 'room.kicked', 'data': {'roomId': t.id, 'by': kicker.displayName, 'minutes': s.kickBanMinutes}});
+    }
+    return null;
+  }
+
+  /// Masaya biri oturunca: Oto Tekme ve Oto Mesaj.
+  void _onJoinAutomation(GameTable t, SeatPlayer joiner) {
+    final now = DateTime.now();
+    final joinerRec = store.users[joiner.userId];
+    for (final p in t.players.toList()) {
+      if (p.userId == joiner.userId) continue;
+      final u = store.users[p.userId];
+      if (u == null || !isOnline(u.id)) continue;
+      if (joinerRec != null && _autoActive(u, 'autoKick') && autoList(u.auto, 'autoKick').contains(joiner.userId)) {
+        final delay = ((u.auto['autoKick'] as Map?)?['delayMs'] as num? ?? 800).toInt();
+        _schedule('kick:${t.id}:${u.id}:${joiner.userId}', Duration(milliseconds: delay), () {
+          final err = kickPlayer(u, t, joiner.userId, auto: true);
+          if (err != null) _toUser(u.id, Ev.error, {'message': 'Oto Tekme: $err'});
+        });
+      }
+      if (_autoActive(u, 'autoGreet')) {
+        final key = '${u.id}:${joiner.userId}';
+        final last = _greeted[key];
+        if (last != null && now.difference(last).inMinutes < 10) continue;
+        final times = _greetTimes.putIfAbsent(u.id, () => [])..removeWhere((x) => now.difference(x).inSeconds >= 60);
+        if (times.length >= store.settings.greetPerMinute) continue;
+        final text = '${(u.auto['autoGreet'] as Map?)?['text'] ?? 'Hoş geldin {ad}!'}'.replaceAll('{ad}', joiner.name);
+        if (_blocked(text)) continue;
+        _greeted[key] = now;
+        times.add(now);
+        _schedule('greet:$key', const Duration(milliseconds: 1200), () {
+          if (t.seatOf(u.id) != null && t.seatOf(joiner.userId) != null) t.say(u.id, text);
+        });
       }
     }
   }
@@ -194,6 +387,7 @@ class SpectreServer {
     switch (e) {
       case SeatUpdated(:final index, :final player):
         _toChannel(ch, Ev.seatUpdated, {'index': index, ...player.toJson()});
+        if (_justJoined.remove('${t.id}:${player.userId}')) _onJoinAutomation(t, player);
       case SeatVacated(:final index, :final userId):
         _toChannel(ch, Ev.seatVacated, {'index': index, 'playerId': userId});
       case ChatEvent(:final line):
@@ -713,9 +907,13 @@ class SpectreServer {
     }
     final o = store.orders.where((x) => x.id == oid).firstOrNull;
     if (o != null && o.status == 'pending') {
+      final pu = store.users[o.userId];
+      final vars = {'order': o.id, 'package': o.packageName, 'amount': '${(o.amountKurus / 100).toStringAsFixed(2)} TL'};
       if (status == 'success') {
         _applyOrder(o, 'approve', 'paytr');
+        if (pu != null) _mail(pu, 'paymentSuccess', vars);
       } else {
+        if (pu != null) _mail(pu, 'paymentFailed', {...vars, 'reason': form['failed_reason_msg'] ?? 'Banka işlemi reddetti'});
         o.status = 'failed';
         o.note = form['failed_reason_msg'] ?? '';
         o.updatedAt = DateTime.now();
@@ -964,11 +1162,36 @@ class SpectreServer {
         final u = store.userByName(username);
         if (u == null || u.passwordHash.isEmpty || !verifyPassword('${b['password'] ?? ''}', u.passwordHash)) {
           _loginFailed(key, 'oyuncu "$username" ($ip)');
+          if (u != null) {
+            final now = DateTime.now();
+            u.loginFailures
+              ..removeWhere((x) => now.difference(x).inMinutes >= 10)
+              ..add(now);
+            if (s.mailOnLoginFail &&
+                u.loginFailures.length >= 3 &&
+                (u.lastFailMail == null || now.difference(u.lastFailMail!).inHours >= 1)) {
+              u.lastFailMail = now;
+              _mail(u, 'loginFailed', {
+                'ip': ip,
+                'count': '${u.loginFailures.length}',
+                'time': _date(now),
+                'link': _link('/sifre-sifirla', _newToken(u, 'reset', const Duration(hours: 1))),
+              });
+            }
+          }
           throw ApiError(401, 'Kullanıcı adı veya şifre hatalı');
         }
         if (u.status == 'banned') throw ApiError(403, 'Hesabınız yasaklanmıştır');
         if (u.status == 'suspended') throw ApiError(403, 'Hesabınız askıya alınmıştır');
         u.lastSeen = DateTime.now();
+        u.loginFailures.clear();
+        if (s.mailOnLogin) {
+          _mail(u, 'loginSuccess', {
+            'ip': ip,
+            'time': _date(DateTime.now()),
+            'link': _link('/sifre-sifirla', _newToken(u, 'reset', const Duration(hours: 1))),
+          });
+        }
         return {'token': _issue(u.id, admin: false), 'me': meJson(u)};
       case 'authGuest' when m == 'POST':
         if (!s.guestLogin) throw ApiError(403, 'Misafir girişi kapalı');
@@ -1180,6 +1403,40 @@ class SpectreServer {
           throw ApiError(502, 'Ödeme başlatılamadı: $e');
         }
 
+      // --- Otomasyon Merkezi ---
+      case 'automation':
+        final u = _requireUser(req);
+        if (m == 'PUT') {
+          final b = await _body(req);
+          final next = normalizeAutomation(b);
+          // Hakkı olmayan otomasyon açılamaz.
+          for (final k in kAutomationFeatures.keys) {
+            final sec = next[k];
+            if (sec is Map && sec['enabled'] == true && !allowed(u, k)) throw ApiError(403, _lockedMsg(k));
+          }
+          if ((next['save'] as Map)['selfProtect'] == true && !allowed(u, 'save')) throw ApiError(403, _lockedMsg('save'));
+          u.auto = next;
+          store.markDirty();
+        }
+        final norm = normalizeAutomation(u.auto);
+        final ids = <String>{
+          for (final k in const ['autoKiss', 'autoReject', 'save', 'autoKick']) ...autoList(norm, k),
+          ...((norm['luck'] as Map)['list'] as Map).keys.cast<String>(),
+        };
+        return {
+          'settings': norm,
+          'features': {
+            for (final e in kAutomationFeatures.entries)
+              e.key: {'name': store.feature(e.key)?.name ?? e.value.$1, 'description': e.value.$2, 'allowed': allowed(u, e.key)}
+          },
+          'players': {
+            for (final id in ids)
+              if (store.users[id] != null) id: publicUser(store.users[id]!)
+          },
+          'kickCost': s.kickCost,
+          'kickCooldownSec': s.kickCooldownSec,
+        };
+
       // --- Destek ---
       case 'support':
         final u = _requireUser(req);
@@ -1276,6 +1533,14 @@ class SpectreServer {
     _clients.add(c);
     u.lastSeen = DateTime.now();
     tableOf(u.id)?.setConnected(u.id, true, DateTime.now());
+    if (tableOf(u.id) == null && _autoActive(u, 'autoEnter') && !store.settings.maintenance) {
+      final want = '${(u.auto['autoEnter'] as Map?)?['roomId'] ?? ''}';
+      final t = (want.isNotEmpty ? tables[want] : null) ?? _bestTable();
+      if (t != null && !t.closed && !t.locked && !t.isFull) {
+        _joinTable(t, u, DateTime.now());
+        c.channels.add(roomChannel(t.id));
+      }
+    }
     c.send({'channel': null, 'event': Ev.hello, 'data': {'me': meJson(u), 'roomId': tableOf(u.id)?.id}});
     ws.listen(
       (data) {
@@ -1325,7 +1590,10 @@ class SpectreServer {
         if (t.locked && t.seatOf(u.id) == null) return _err(c, 'Masa kilitli');
         final current = tableOf(u.id);
         if (current != null && current != t) current.leave(u.id, now);
-        final seat = t.join(_seatPlayer(u), now, preferredSeat: msg['seat'] is int ? msg['seat'] as int : null);
+        final seat = _joinTable(t, u, now, seat: msg['seat'] is int ? msg['seat'] as int : null);
+        if (seat == null && t.kickedUntil[u.id] != null && now.isBefore(t.kickedUntil[u.id]!)) {
+          return _err(c, 'Bu masadan çıkarıldın; ${t.kickedUntil[u.id]!.difference(now).inMinutes + 1} dk sonra tekrar deneyebilirsin');
+        }
         if (seat == null) return _err(c, 'Masada boş koltuk yok');
         c.channels.add(roomChannel(t.id));
         c.send({'channel': roomChannel(t.id), 'event': Ev.snapshot, 'data': t.snapshot(now).toJson()});
@@ -1353,6 +1621,33 @@ class SpectreServer {
         _gift(c, u, msg, now);
       case Op.giftAll:
         _giftAll(c, u, msg, now);
+      case 'kick':
+        final t = tableOf(u.id);
+        if (t == null) return _err(c, 'Önce masaya otur');
+        final seat = msg['seat'] is int ? msg['seat'] as int : -1;
+        final target = seat >= 0 && seat < kSeatCount ? t.seats[seat].player : null;
+        if (target == null) return _err(c, 'Koltuk boş');
+        final err = kickPlayer(u, t, target.userId);
+        if (err != null) _err(c, err);
+      case 'multiKick':
+        if (!allowed(u, 'multiKick')) return _err(c, _lockedMsg('multiKick'));
+        final t = tableOf(u.id);
+        if (t == null) return _err(c, 'Önce masaya otur');
+        final seats = (msg['seats'] as List? ?? const []).whereType<int>().where((x) => x >= 0 && x < kSeatCount).toSet();
+        var done = 0;
+        final errors = <String>[];
+        for (final seat in seats) {
+          final target = t.seats[seat].player;
+          if (target == null || target.userId == u.id) continue;
+          u.lastKickAt = null; // çoklu tekmede bekleme süresi tek sefer sayılır
+          final err = kickPlayer(u, t, target.userId);
+          if (err == null) {
+            done++;
+          } else {
+            errors.add(err);
+          }
+        }
+        c.send({'channel': null, 'event': 'notice', 'data': {'text': 'Çoklu Tekme: $done oyuncu çıkarıldı${errors.isEmpty ? '' : ' · ${errors.first}'}'}});
       default:
         _err(c, 'Bilinmeyen işlem');
     }
@@ -1913,7 +2208,7 @@ class SpectreServer {
           'items': {
             for (final k in kDefaultMailTemplates.keys) k: {...templateOf(k), 'name': kDefaultMailTemplates[k]!['name']}
           },
-          'variables': ['brand', 'site', 'name', 'username', 'link', 'order', 'package', 'amount', 'coins', 'features', 'expires', 'feature', 'days', 'message'],
+          'variables': ['brand', 'site', 'name', 'username', 'link', 'order', 'package', 'amount', 'coins', 'features', 'expires', 'feature', 'days', 'message', 'reason', 'ip', 'time', 'count'],
         };
       }
     }
@@ -1935,6 +2230,10 @@ class SpectreServer {
         'feature': 'Özel mesaj',
         'days': '3',
         'message': 'Örnek yanıt',
+        'reason': 'Yetersiz bakiye',
+        'ip': '203.0.113.7',
+        'time': _date(DateTime.now()),
+        'count': '3',
       });
       if (!ok) throw ApiError(502, 'Gönderilemedi: ${store.mailLog.last['error']}');
       return {'ok': true};

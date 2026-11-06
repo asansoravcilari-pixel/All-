@@ -125,4 +125,29 @@ void main() {
     expect(rp.map((e) => e.index), [0, 7]);
     expect(rp.every((e) => e.leaveAt == null && e.isPlaying), isTrue);
   });
+
+  test('tekme: oyuncu kalkar ve süre dolana kadar aynı masaya oturamaz', () {
+    t.join(_p('a'), now, preferredSeat: 0);
+    t.join(_p('b'), now, preferredSeat: 1);
+    expect(t.kick('b', now, byName: 'a', banFor: const Duration(minutes: 5)), isTrue);
+    expect(t.seatOf('b'), isNull);
+    expect(t.join(_p('b'), now.add(const Duration(minutes: 1))), isNull);
+    expect(t.join(_p('b'), now.add(const Duration(minutes: 6))), isNotNull);
+  });
+
+  test('şans ağırlığı hedef seçimini etkiler', () {
+    for (final id in ['a', 'b', 'c']) {
+      t.join(_p(id), now);
+    }
+    t.spinnerSeat = t.seatOf('a')!;
+    t.targetWeight = (s, c) => c == 'c' ? 11 : 1;
+    var hitsC = 0;
+    for (var i = 0; i < 300; i++) {
+      t.phase = RoundPhase.idle;
+      t.spinnerSeat = t.seatOf('a')!;
+      t.spin('a', now);
+      if (t.targetSeat == t.seatOf('c')) hitsC++;
+    }
+    expect(hitsC, greaterThan(220)); // ~%92 beklenir
+  });
 }

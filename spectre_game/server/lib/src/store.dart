@@ -35,7 +35,9 @@ class UserRec {
     Map<String, DateTime>? entitlements,
     Map<String, int>? inventory,
     Set<String>? expiryWarned,
-  })  : notes = notes ?? [],
+    Map<String, dynamic>? auto,
+  })  : auto = auto ?? {},
+        notes = notes ?? [],
         warnings = warnings ?? [],
         entitlements = entitlements ?? {},
         inventory = inventory ?? {},
@@ -75,6 +77,12 @@ class UserRec {
   /// Bitiş uyarısı gönderilmiş haklar (anahtar@bitiş).
   final Set<String> expiryWarned;
 
+  /// Otomasyon ayarları (bkz. automation.dart).
+  Map<String, dynamic> auto;
+  DateTime? lastKickAt;
+  final List<DateTime> loginFailures = [];
+  DateTime? lastFailMail;
+
   bool has(String feature) {
     final e = entitlements[feature];
     return e != null && DateTime.now().isBefore(e);
@@ -108,6 +116,7 @@ class UserRec {
         'entitlements': {for (final e in entitlements.entries) e.key: e.value.toIso8601String()},
         'inventory': inventory,
         'expiryWarned': expiryWarned.toList(),
+        'auto': auto,
         'notes': notes,
         'warnings': warnings,
       };
@@ -141,6 +150,7 @@ class UserRec {
         },
         inventory: {for (final e in ((j['inventory'] as Map?) ?? const {}).entries) '${e.key}': (e.value as num).toInt()},
         expiryWarned: {for (final x in (j['expiryWarned'] as List? ?? const [])) '$x'},
+        auto: (j['auto'] as Map?)?.cast<String, dynamic>(),
         notes: (j['notes'] as List?)?.cast<String>(),
         warnings: (j['warnings'] as List?)?.cast<String>(),
       );
@@ -482,6 +492,7 @@ const Map<String, String> kDefaultEndpoints = {
   'authReset': '/api/v1/auth/reset',
   'payStart': '/api/v1/pay/paytr/start',
   'support': '/api/v1/support',
+  'automation': '/api/v1/automation',
   'ws': '/ws',
 };
 
@@ -527,6 +538,12 @@ const Map<String, String> kDefaultTexts = {
   'notifications.title': 'Bildirimler',
   'notifications.empty': 'Bildirim yok',
   'market.title': 'Market',
+  'payment.success': 'Ödemen alındı. Onaylandığında haklar hesabına otomatik tanımlanır.',
+  'payment.failed': 'Ödeme tamamlanamadı. Tekrar deneyebilirsin.',
+  'login.success': 'Hoş geldin {ad}!',
+  'login.failed': 'Kullanıcı adı veya şifre hatalı.',
+  'auto.title': 'Otomasyon Merkezi',
+  'auto.selectHint': 'Hedef seçmek için oyuncunun fotoğrafına 1,5 saniye basılı tut.',
 };
 
 /// Açılır pencerelerin üst/alt açıklama metinleri (admin panelinden).
@@ -550,6 +567,15 @@ class Settings {
   bool marketOpen = true;
   int maxMessagesPerMinute = 20;
   int maxGiftsPerMinute = 10;
+  // Tekme ve otomasyon
+  int kickCost = 20;
+  int kickCooldownSec = 20;
+  int kickBanMinutes = 5;
+  int greetPerMinute = 3;
+  int autoDelayMs = 900;
+  // Oturum bildirimleri
+  bool mailOnLogin = false;
+  bool mailOnLoginFail = true;
   int dailyRewardCoins = 50;
   int startingCoins = 200;
   List<String> blockedWords = [];
@@ -674,6 +700,13 @@ class Settings {
         'supportLockMinutes': supportLockMinutes,
         'supportSafetyWords': supportSafetyWords,
         'animations': effectiveAnimations,
+        'kickCost': kickCost,
+        'kickCooldownSec': kickCooldownSec,
+        'kickBanMinutes': kickBanMinutes,
+        'greetPerMinute': greetPerMinute,
+        'autoDelayMs': autoDelayMs,
+        'mailOnLogin': mailOnLogin,
+        'mailOnLoginFail': mailOnLoginFail,
       };
 
   Map<String, dynamic> toStorageJson() => {
@@ -805,6 +838,13 @@ class Settings {
       }
       mailTemplates = out;
     }
+    kickCost = i('kickCost', 0, 100000) ?? kickCost;
+    kickCooldownSec = i('kickCooldownSec', 0, 3600) ?? kickCooldownSec;
+    kickBanMinutes = i('kickBanMinutes', 0, 1440) ?? kickBanMinutes;
+    greetPerMinute = i('greetPerMinute', 1, 60) ?? greetPerMinute;
+    autoDelayMs = i('autoDelayMs', 200, 10000) ?? autoDelayMs;
+    mailOnLogin = b('mailOnLogin') ?? mailOnLogin;
+    mailOnLoginFail = b('mailOnLoginFail') ?? mailOnLoginFail;
     supportEnabled = b('supportEnabled') ?? supportEnabled;
     supportBotName = s('supportBotName', 60) ?? supportBotName;
     supportGreeting = s('supportGreeting', 500) ?? supportGreeting;
@@ -874,6 +914,8 @@ class Settings {
         'requireEmail': requireEmail,
         'support': supportEnabled,
         'supportBotName': supportBotName,
+        'kickCost': kickCost,
+        'kickBanMinutes': kickBanMinutes,
       };
 }
 
