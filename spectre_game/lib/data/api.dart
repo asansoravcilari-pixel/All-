@@ -36,6 +36,7 @@ abstract final class ApiConfig {
     'authReset': '/api/v1/auth/reset',
     'payStart': '/api/v1/pay/paytr/start',
     'support': '/api/v1/support',
+    'translate': '/api/v1/translate',
     'ws': '/ws',
   };
 

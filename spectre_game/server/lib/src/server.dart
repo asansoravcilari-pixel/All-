@@ -1070,6 +1070,8 @@ class SpectreServer {
     _toUser(userId, Ev.notify, {'notice': n.toJson(), 'unread': store.unreadNotices(userId), 'unreadDm': store.unreadDms(userId)});
   }
 
+  final Map<String, List<DateTime>> _translateTimes = {};
+
   /// LibreTranslate uyumlu servis ile çeviri. Hata olursa null.
   Future<String?> _translate(String text, String target) async {
     final s = store.settings;
@@ -1454,6 +1456,22 @@ class SpectreServer {
           'kickCost': s.kickCost,
           'kickCooldownSec': s.kickCooldownSec,
         };
+
+      // --- İsteğe bağlı çeviri (mesajdaki "Çevir" düğmesi) ---
+      case 'translate' when m == 'POST':
+        final u = _requireUser(req);
+        if (!s.translateEnabled || s.translateUrl.isEmpty) throw ApiError(503, 'Çeviri şu an kapalı');
+        if (!allowed(u, 'translate')) throw ApiError(403, _lockedMsg('translate'));
+        final times = _translateTimes.putIfAbsent(u.id, () => [])
+          ..removeWhere((x) => DateTime.now().difference(x).inSeconds >= 60);
+        if (times.length >= 30) throw ApiError(429, 'Çok fazla çeviri isteği, biraz bekle');
+        times.add(DateTime.now());
+        final b = await _body(req);
+        final text = _clip('${b['text'] ?? ''}'.trim(), 1000);
+        if (text.isEmpty) throw ApiError(400, 'Metin boş');
+        final target = b['lang'] is String && s.languages.contains(b['lang']) ? b['lang'] as String : u.lang;
+        final out = await _translate(text, target);
+        return {'lang': target, 'text': out ?? text, 'translated': out != null};
 
       // --- Destek ---
       case 'support':

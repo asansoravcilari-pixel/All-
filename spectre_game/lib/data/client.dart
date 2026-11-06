@@ -150,6 +150,7 @@ class SpectreClient extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       lightMode = prefs.getBool(_lightKey) ?? false;
+      showTranslations = prefs.getBool('spectre.showTr') ?? true;
       await refreshConfig();
       final token = prefs.getString(_tokenKey);
       if (token != null) {
@@ -207,6 +208,23 @@ class SpectreClient extends ChangeNotifier {
   Future<String> startCardPayment(String packageId) async {
     final r = await api.post(ApiConfig.ep('payStart'), {'packageId': packageId});
     return '${r['paymentUrl']}';
+  }
+
+  /// Sohbette çevirileri göster (sohbet başlığındaki düğme).
+  bool showTranslations = true;
+
+  Future<void> setShowTranslations(bool v) async {
+    showTranslations = v;
+    notifyListeners();
+    try {
+      (await SharedPreferences.getInstance()).setBool('spectre.showTr', v);
+    } catch (_) {}
+  }
+
+  /// Tek bir metni oyuncunun diline çevirir.
+  Future<String?> translateText(String text) async {
+    final r = await api.post(ApiConfig.ep('translate'), {'text': text});
+    return r['translated'] == true ? '${r['text']}' : null;
   }
 
   Future<Map<String, dynamic>> support([String? text]) =>

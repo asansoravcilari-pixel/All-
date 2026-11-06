@@ -631,4 +631,31 @@ void main() {
     expect(((u2['me'] as Map)['entitlements'] as Map), isNot(contains('groupGift')));
     await call('POST', '/admin/api/v1/features', token: admin, body: {'key': 'groupGift', 'locked': false});
   });
+
+  test('mesajdaki Çevir düğmesi: isteğe bağlı çeviri', () async {
+    final tr = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    tr.listen((req) async {
+      final b = jsonDecode(await utf8.decoder.bind(req).join()) as Map;
+      req.response.headers.contentType = ContentType.json;
+      req.response.write(jsonEncode({'translatedText': 'Hello', 'detectedLanguage': {'language': 'tr'}, 'target': b['target']}));
+      await req.response.close();
+    });
+    final (_, a) = await call('POST', '/admin/api/v1/login', body: {'username': 'patron', 'password': 'cok-gizli-123'});
+    final admin = a['token'] as String;
+    final (_, u) = await call('POST', '/api/v1/auth/register', body: {'username': 'cevirmen', 'password': 'sifre-9999'});
+    final t = u['token'] as String;
+    final (off, _) = await call('POST', '/api/v1/translate', token: t, body: {'text': 'Merhaba'});
+    expect(off, 503);
+    await call('PUT', '/admin/api/v1/settings', token: admin, body: {
+      'settings': {'translateEnabled': true, 'translateUrl': 'http://127.0.0.1:${tr.port}/translate'}
+    });
+    await call('PATCH', '/api/v1/me', token: t, body: {'lang': 'en'});
+    final (st, r) = await call('POST', '/api/v1/translate', token: t, body: {'text': 'Merhaba'});
+    expect(st, 200);
+    expect(r['translated'], isTrue);
+    expect(r['text'], 'Hello');
+    expect(r['lang'], 'en');
+    await call('PUT', '/admin/api/v1/settings', token: admin, body: {'settings': {'translateEnabled': false}});
+    await tr.close(force: true);
+  });
 }

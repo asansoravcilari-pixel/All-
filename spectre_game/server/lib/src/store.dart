@@ -493,6 +493,7 @@ const Map<String, String> kDefaultEndpoints = {
   'payStart': '/api/v1/pay/paytr/start',
   'support': '/api/v1/support',
   'automation': '/api/v1/automation',
+  'translate': '/api/v1/translate',
   'ws': '/ws',
 };
 

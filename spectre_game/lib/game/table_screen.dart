@@ -716,6 +716,14 @@ class _ChatWrap extends StatelessWidget {
           Text(client.t('chat.title', 'Masa Sohbeti'),
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: _hudSmall, letterSpacing: 0.4)),
           const Spacer(),
+          if (client.config.translate)
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              tooltip: client.showTranslations ? 'Çevirileri gizle' : 'Çevirileri göster',
+              onPressed: () => client.setShowTranslations(!client.showTranslations),
+              icon: Icon(Icons.translate_rounded,
+                  size: 19, color: client.showTranslations ? SpectreColors.cyan : SpectreColors.muted),
+            ),
           if (onToggle != null)
             IconButton(
               visualDensity: VisualDensity.compact,
@@ -743,6 +751,7 @@ class _ChatWrap extends StatelessWidget {
                     m: m,
                     lang: client.me?.lang ?? 'tr',
                     onTapUser: onTapUser,
+                    client: client,
                   );
                 },
               ),

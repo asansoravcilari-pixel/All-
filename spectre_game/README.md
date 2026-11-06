@@ -80,13 +80,3 @@ flutter test                              # istemci masa durumu (4)
 API ayrıntıları: [`docs/API.md`](docs/API.md) · Geçiş planı: [`docs/GECIS_PLANI.md`](docs/GECIS_PLANI.md)
 
 Yazı tipi: Manrope, SIL Open Font License 1.1 (`assets/fonts/OFL.txt`).
-
-## Ekran görüntüleri (gerçek sunucuyla, iki oyuncu)
-
-| Masa (masaüstü) | Masa (telefon, v39 yapısı) |
-|---|---|
-| ![](docs/ekran/masa-masaustu.png) | ![](docs/ekran/masa-telefon.png) |
-
-| Kontrol Merkezi | Canlı Masalar |
-|---|---|
-| ![](docs/ekran/admin-kontrol-merkezi.png) | ![](docs/ekran/admin-canli-masalar.png) |

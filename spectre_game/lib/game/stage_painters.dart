@@ -352,7 +352,77 @@ class SquareFloorPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final r = size.shortestSide * 0.56;
+    // --- Masa tablası: koltukların ortasında metal çerçeveli koyu cam ---
+    final board = RRect.fromRectAndRadius(
+      Rect.fromLTRB(size.width * 0.235, size.height * 0.255, size.width * 0.765, size.height * 0.695),
+      Radius.circular(size.width * 0.05),
+    );
+    final bRect = board.outerRect;
+    // gölge
+    canvas.drawRRect(
+      board.shift(const Offset(0, 8)),
+      Paint()
+        ..color = Colors.black.withOpacity(0.55)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 18),
+    );
+    // cam yüzey
+    canvas.drawRRect(
+      board,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color.lerp(const Color(0xFF0D2236), theme.primary, 0.06)!,
+            const Color(0xFF07131F),
+            const Color(0xFF050D16),
+          ],
+        ).createShader(bRect),
+    );
+    // çapraz parlama
+    canvas.save();
+    canvas.clipRRect(board);
+    canvas.drawRect(
+      bRect,
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Colors.white.withOpacity(0.07), Colors.white.withOpacity(0), Colors.white.withOpacity(0.025)],
+          stops: const [0, 0.45, 1],
+        ).createShader(bRect),
+    );
+    // ince yatay çizgiler (fırçalanmış metal dokusu)
+    final lines = Paint()
+      ..color = Colors.white.withOpacity(0.018)
+      ..strokeWidth = 1;
+    for (var y = bRect.top + 6; y < bRect.bottom; y += 6) {
+      canvas.drawLine(Offset(bRect.left, y), Offset(bRect.right, y), lines);
+    }
+    canvas.restore();
+    // metalik çerçeve
+    canvas.drawRRect(
+      board,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.4
+        ..shader = const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFFEAF6FF), Color(0xFF7FA9C8), Color(0xFF2E5371), Color(0xFFBFDDF2), Color(0xFF5E86A6)],
+          stops: [0, 0.25, 0.5, 0.75, 1],
+        ).createShader(bRect),
+    );
+    // iç ince çizgi
+    canvas.drawRRect(
+      board.deflate(7),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = theme.primary.withOpacity(0.22),
+    );
+
+    final r = size.shortestSide * 0.42;
     // Merkez ışığı (v39: radial-gradient #0a1e2a 8% → saydam 56%)
     canvas.drawCircle(
       center,
@@ -363,16 +433,6 @@ class SquareFloorPainter extends CustomPainter {
           theme.primary.withOpacity(0.05),
           Colors.transparent,
         ], stops: const [0.08, 0.6, 1]).createShader(Rect.fromCircle(center: center, radius: r)),
-    );
-    // Hafif nefes alan halka
-    final pulse = 0.5 + 0.5 * math.sin(time * 1.6);
-    canvas.drawCircle(
-      center,
-      size.shortestSide * (0.17 + 0.006 * pulse),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2
-        ..color = theme.primary.withOpacity(0.18 + 0.1 * pulse),
     );
     final t = target;
     if (t != null) {

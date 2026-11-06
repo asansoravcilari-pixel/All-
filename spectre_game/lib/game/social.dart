@@ -121,11 +121,13 @@ class SquareAvatar extends StatelessWidget {
 }
 
 /// Masa sohbeti satırı: kare fotoğraf, renkli ad, metin; çeviri varsa çevrilmiş metin önde.
+/// Çevirisi olmayan mesajda "Çevir" düğmesi isteğe bağlı çeviri yapar.
 class ChatLineView extends StatefulWidget {
-  const ChatLineView({super.key, required this.m, required this.lang, this.onTapUser});
+  const ChatLineView({super.key, required this.m, required this.lang, this.onTapUser, this.client});
   final ChatLine m;
   final String lang;
   final void Function(String userId)? onTapUser;
+  final SpectreClient? client;
 
   @override
   State<ChatLineView> createState() => _ChatLineViewState();
@@ -133,6 +135,27 @@ class ChatLineView extends StatefulWidget {
 
 class _ChatLineViewState extends State<ChatLineView> {
   bool _original = false;
+  bool _busy = false;
+
+  Future<void> _translate() async {
+    final c = widget.client;
+    if (c == null || _busy) return;
+    setState(() => _busy = true);
+    try {
+      final t = await c.translateText(widget.m.text);
+      if (!mounted) return;
+      if (t == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Bu mesaj zaten senin dilinde')));
+      } else {
+        widget.m.translations[widget.lang] = t;
+        _original = false;
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -143,8 +166,12 @@ class _ChatLineViewState extends State<ChatLineView> {
         child: Text(m.text, style: const TextStyle(color: SpectreColors.muted, fontSize: 12, fontStyle: FontStyle.italic)),
       );
     }
+    final c = widget.client;
+    final show = c?.showTranslations ?? true;
     final tr = m.translations[widget.lang];
-    final shown = tr != null && !_original ? tr : m.text;
+    final mine = c?.me?.id == m.userId;
+    final shown = tr != null && show && !_original ? tr : m.text;
+    final canTranslate = c != null && c.config.translate && !mine && tr == null;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 3),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -157,7 +184,7 @@ class _ChatLineViewState extends State<ChatLineView> {
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(m.name, style: TextStyle(color: Color(m.color), fontWeight: FontWeight.w800, fontSize: 12)),
             Text(shown, style: const TextStyle(fontSize: 13.5, height: 1.25)),
-            if (tr != null)
+            if (tr != null && show)
               GestureDetector(
                 onTap: () => setState(() => _original = !_original),
                 child: Padding(
@@ -172,6 +199,16 @@ class _ChatLineViewState extends State<ChatLineView> {
               ),
           ]),
         ),
+        if (canTranslate)
+          IconButton(
+            tooltip: 'Çevir',
+            visualDensity: VisualDensity.compact,
+            iconSize: 17,
+            onPressed: _busy ? null : _translate,
+            icon: _busy
+                ? const SizedBox.square(dimension: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.translate_rounded, color: SpectreColors.cyan),
+          ),
       ]),
     );
   }
@@ -412,7 +449,34 @@ class _DmThreadSheetState extends State<DmThreadSheet> {
                                 Text(tr ?? m.text, style: const TextStyle(fontSize: 14)),
                                 if (tr != null)
                                   Text(m.text, style: const TextStyle(fontSize: 11, color: SpectreColors.muted)),
-                                Text(_hm(m.at), style: const TextStyle(fontSize: 10, color: SpectreColors.muted)),
+                                Row(mainAxisSize: MainAxisSize.min, children: [
+                                  Text(_hm(m.at), style: const TextStyle(fontSize: 10, color: SpectreColors.muted)),
+                                  if (!mine && tr == null && c.config.translate) ...[
+                                    const SizedBox(width: 8),
+                                    GestureDetector(
+                                      onTap: () async {
+                                        try {
+                                          final t = await c.translateText(m.text);
+                                          if (t != null && mounted) {
+                                            setState(() => m.j['translations'] = {
+                                                  ...((m.j['translations'] as Map?) ?? const {}),
+                                                  lang: t,
+                                                });
+                                          }
+                                        } catch (e) {
+                                          if (context.mounted) {
+                                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+                                          }
+                                        }
+                                      },
+                                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                                        Icon(Icons.translate_rounded, size: 12, color: SpectreColors.cyan),
+                                        SizedBox(width: 3),
+                                        Text('Çevir', style: TextStyle(fontSize: 11, color: SpectreColors.cyan)),
+                                      ]),
+                                    ),
+                                  ],
+                                ]),
                               ]),
                             ),
                           ),

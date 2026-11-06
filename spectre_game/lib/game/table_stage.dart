@@ -254,19 +254,39 @@ class _SeatSlot extends StatelessWidget {
                       duration: SpectreMotion.normal,
                       child: AnimatedContainer(
                         duration: SpectreMotion.normal,
+                        // Metalik degrade çerçeve
+                        padding: EdgeInsets.all(p != null ? 2.2 : 1.2),
                         decoration: BoxDecoration(
                           borderRadius: radius,
-                          color: const Color(0xFF0B2942),
-                          border: Border.all(color: ring, width: p != null ? 1.6 : 1),
+                          gradient: p == null
+                              ? const LinearGradient(colors: [Color(0xFF3B6A8E), Color(0xFF1D3A55)])
+                              : (isTarget || isSpinner || isMe)
+                                  ? LinearGradient(
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                      colors: [Colors.white, ring, Color.lerp(ring, Colors.black, 0.35)!],
+                                    )
+                                  : const LinearGradient(
+                                      begin: Alignment.topLeft,
+                                      end: Alignment.bottomRight,
+                                      colors: [Color(0xFFE6F4FF), Color(0xFF7FB2D6), Color(0xFF3C6A8F), Color(0xFFBFE0F7)],
+                                      stops: [0, 0.35, 0.7, 1],
+                                    ),
                           boxShadow: [
                             BoxShadow(
-                              color: (p != null ? ring : const Color(0xFF16496A)).withOpacity(isTarget || isSpinner ? 0.7 : 0.35),
-                              blurRadius: isTarget || isSpinner ? 18 : 9,
+                              color: Colors.black.withOpacity(0.45),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
                             ),
+                            if (p != null)
+                              BoxShadow(
+                                color: ring.withOpacity(isTarget || isSpinner ? 0.75 : 0.28),
+                                blurRadius: isTarget || isSpinner ? 20 : 10,
+                              ),
                           ],
                         ),
                         child: ClipRRect(
-                          borderRadius: radius,
+                          borderRadius: BorderRadius.circular(side * 0.11 - 1.5),
                           child: AnimatedSwitcher(
                             duration: SpectreMotion.slow,
                             switchInCurve: SpectreMotion.spring,
@@ -309,19 +329,30 @@ class _SeatSlot extends StatelessWidget {
                   ),
               ]),
             ),
-            const SizedBox(height: 2),
-            Text(
-              p == null ? '' : (isMe ? '${p.name} (sen)' : p.name),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: (slot * 0.11).clamp(9.0, 13.0),
-                fontWeight: FontWeight.w700,
-                color: isMe ? SpectreColors.cyan : const Color(0xFFEEFAFF),
-                shadows: const [Shadow(color: Colors.black, blurRadius: 2, offset: Offset(0, 1))],
+            const SizedBox(height: 3),
+            if (p == null)
+              SizedBox(height: (slot * 0.11).clamp(9.0, 13.0) + 6)
+            else
+              Container(
+                constraints: BoxConstraints(maxWidth: slot),
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1.5),
+                decoration: BoxDecoration(
+                  color: const Color(0xE6040C16),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(color: (isMe ? SpectreColors.cyan : const Color(0xFF6E9CC0)).withOpacity(0.55), width: 0.8),
+                ),
+                child: Text(
+                  isMe ? '${p.name} (sen)' : p.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: (slot * 0.105).clamp(9.0, 12.5),
+                    fontWeight: FontWeight.w700,
+                    color: isMe ? SpectreColors.cyan : const Color(0xFFEEFAFF),
+                  ),
+                ),
               ),
-            ),
           ]),
         ),
       ),
@@ -371,14 +402,15 @@ class _EmptySeatFace extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SizedBox.expand(
         child: DecoratedBox(
+          // v39 boş koltuk: buzlu çelik mavi zemin, ortada kişi simgesi
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFF0E3150), Color(0xFF0A2238)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF2B4C69), Color(0xFF203B54), Color(0xFF1A3147)],
             ),
           ),
-          child: Icon(Icons.event_seat_rounded, size: side * 0.42, color: const Color(0xFF2C5B82)),
+          child: Icon(Icons.account_circle_outlined, size: side * 0.56, color: const Color(0xFF13263A)),
         ),
       );
 }
