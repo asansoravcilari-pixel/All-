@@ -35,6 +35,7 @@ class TableStage extends StatefulWidget {
     required this.onSeatTap,
     required this.light,
     this.centre,
+    this.status,
     this.anim = const {},
   });
 
@@ -42,7 +43,11 @@ class TableStage extends StatefulWidget {
   final String meId;
   final void Function(int seat) onSeatTap;
   final bool light;
+  /// Tur düğmeleri (şişenin altında, koltukların önünde).
   final Widget? centre;
+
+  /// Tur durumu yazısı (şişenin üstünde).
+  final Widget? status;
 
   /// Yönetim panelinden animasyon ayarları.
   final Map<String, dynamic> anim;
@@ -97,7 +102,10 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
       aspectRatio: kStageAspect,
       child: LayoutBuilder(builder: (context, box) {
         final geo = StageGeometry(box.biggest);
-        final bottleH = geo.size.height * 0.25;
+        final bottleH = geo.size.height * 0.22;
+        // Şişenin altı ile alt koltuk sırası arasındaki boşluk
+        final controlsTop = geo.center.dy + bottleH * 0.5 + 2;
+        final controlsH = (kSeatOrigins[8].$2 * geo.size.height - controlsTop - 2).clamp(24.0, 80.0);
         final r = table.round;
         final showBeam = r.phase == RoundPhase.deciding || r.phase == RoundPhase.result;
         return Stack(
@@ -145,12 +153,13 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
                 ),
               ),
             ),
-            if (widget.centre != null)
+            if (widget.status != null)
               Positioned(
                 left: geo.size.width * 0.25,
                 right: geo.size.width * 0.25,
-                top: geo.center.dy + bottleH * 0.52,
-                child: widget.centre!,
+                top: geo.center.dy - bottleH * 0.5 - 22,
+                height: 20,
+                child: IgnorePointer(child: Center(child: widget.status!)),
               ),
             for (final seat in table.seats)
               _SeatSlot(
@@ -161,6 +170,15 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
                 clock: _clock,
                 isMe: seat.player?.userId == widget.meId,
                 onTap: () => widget.onSeatTap(seat.index),
+              ),
+            // Düğmeler koltukların önünde çizilir; dar ekranda sığacak kadar küçülür.
+            if (widget.centre != null)
+              Positioned(
+                left: geo.size.width * 0.24,
+                right: geo.size.width * 0.24,
+                top: controlsTop,
+                height: controlsH,
+                child: Center(child: FittedBox(fit: BoxFit.scaleDown, child: widget.centre!)),
               ),
             Positioned.fill(child: IgnorePointer(child: _FxLayer(key: _fx, geo: geo, light: widget.light, anim: widget.anim))),
           ],

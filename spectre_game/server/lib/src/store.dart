@@ -575,6 +575,10 @@ class Settings {
   int autoDelayMs = 900;
   // Oturum bildirimleri
   bool mailOnLogin = false;
+  // Yeni üye ücretsiz deneme
+  bool trialEnabled = true;
+  int trialDays = 2;
+  List<String> trialFeatures = [];
   bool mailOnLoginFail = true;
   int dailyRewardCoins = 50;
   int startingCoins = 200;
@@ -707,6 +711,9 @@ class Settings {
         'autoDelayMs': autoDelayMs,
         'mailOnLogin': mailOnLogin,
         'mailOnLoginFail': mailOnLoginFail,
+        'trialEnabled': trialEnabled,
+        'trialDays': trialDays,
+        'trialFeatures': trialFeatures,
       };
 
   Map<String, dynamic> toStorageJson() => {
@@ -844,6 +851,9 @@ class Settings {
     greetPerMinute = i('greetPerMinute', 1, 60) ?? greetPerMinute;
     autoDelayMs = i('autoDelayMs', 200, 10000) ?? autoDelayMs;
     mailOnLogin = b('mailOnLogin') ?? mailOnLogin;
+    trialEnabled = b('trialEnabled') ?? trialEnabled;
+    trialDays = i('trialDays', 1, 365) ?? trialDays;
+    trialFeatures = l('trialFeatures') ?? trialFeatures;
     mailOnLoginFail = b('mailOnLoginFail') ?? mailOnLoginFail;
     supportEnabled = b('supportEnabled') ?? supportEnabled;
     supportBotName = s('supportBotName', 60) ?? supportBotName;

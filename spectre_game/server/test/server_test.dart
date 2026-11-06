@@ -610,4 +610,25 @@ void main() {
       expect(sent.where((x) => x.startsWith('dikkat@ornek.com|') && x.contains('başarısız')).length, 1);
     });
   });
+
+  test('yeni üye ücretsiz deneme: seçilen özellikler, ayarlanan gün; kapatılabilir', () async {
+    final (_, a) = await call('POST', '/admin/api/v1/login', body: {'username': 'patron', 'password': 'cok-gizli-123'});
+    final admin = a['token'] as String;
+    await call('POST', '/admin/api/v1/features', token: admin, body: {'key': 'groupGift', 'locked': true});
+    await call('PUT', '/admin/api/v1/settings', token: admin, body: {
+      'settings': {'trialEnabled': true, 'trialDays': 2, 'trialFeatures': ['groupGift']}
+    });
+    final (_, u) = await call('POST', '/api/v1/auth/register', body: {'username': 'denemeci', 'password': 'sifre-7777'});
+    final ent = ((u['me'] as Map)['entitlements'] as Map);
+    expect(ent.keys, contains('groupGift'));
+    final until = DateTime.parse('${ent['groupGift']}');
+    expect(until.difference(DateTime.now()).inHours, inInclusiveRange(47, 48));
+    expect((u['me'] as Map)['locked'], isNot(contains('groupGift')));
+    expect((u['me'] as Map)['locked'], isNot(contains('dm')), reason: 'DM varsayılan olarak ücretsiz');
+
+    await call('PUT', '/admin/api/v1/settings', token: admin, body: {'settings': {'trialEnabled': false}});
+    final (_, u2) = await call('POST', '/api/v1/auth/register', body: {'username': 'denemesiz', 'password': 'sifre-8888'});
+    expect(((u2['me'] as Map)['entitlements'] as Map), isNot(contains('groupGift')));
+    await call('POST', '/admin/api/v1/features', token: admin, body: {'key': 'groupGift', 'locked': false});
+  });
 }

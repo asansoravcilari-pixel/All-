@@ -214,7 +214,8 @@ class _TableScreenState extends State<TableScreen> {
     final two = width >= 900;
     return PopScope(
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop) c.closeRoom();
+        // Masa değiştirirken (yeni masa zaten açıldıysa) eski ekran kapanınca yeni masadan kalkılmasın.
+        if (didPop && c.room?.roomId == t.roomId) c.closeRoom();
       },
       child: ListenableBuilder(
         listenable: t,
@@ -242,6 +243,7 @@ class _TableScreenState extends State<TableScreen> {
                     onSeatTap: _onSeatTap,
                     light: c.lightMode,
                     anim: c.config.animations,
+                    status: _RoundCentre(room: t, client: c, seated: seated, statusOnly: true),
                     centre: _RoundCentre(room: t, client: c, seated: seated),
                   ),
           );
@@ -535,10 +537,13 @@ class _ToolButtonState extends State<_ToolButton> {
 // ---------------------------------------------------------------------------
 
 class _RoundCentre extends StatelessWidget {
-  const _RoundCentre({required this.room, required this.client, required this.seated});
+  const _RoundCentre({required this.room, required this.client, required this.seated, this.statusOnly = false});
   final RoomState room;
   final SpectreClient client;
   final bool seated;
+
+  /// true: yalnız durum yazısı; false: yalnız düğmeler.
+  final bool statusOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -601,6 +606,16 @@ class _RoundCentre extends StatelessWidget {
       );
     }
 
+    if (!statusOnly) {
+      return AnimatedSwitcher(
+        duration: SpectreMotion.normal,
+        switchInCurve: SpectreMotion.spring,
+        transitionBuilder: (c, a) => ScaleTransition(scale: a, child: FadeTransition(opacity: a, child: c)),
+        child: control == null
+            ? const SizedBox(key: ValueKey('none'), width: 1, height: 1)
+            : KeyedSubtree(key: ValueKey('${r.phase}|$myTurn|$involved|$seated'), child: control),
+      );
+    }
     return Column(mainAxisSize: MainAxisSize.min, children: [
       AnimatedSwitcher(
         duration: SpectreMotion.normal,
@@ -610,15 +625,6 @@ class _RoundCentre extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
             style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w700, shadows: const [Shadow(color: Colors.black, blurRadius: 3)])),
-      ),
-      const SizedBox(height: 4),
-      AnimatedSwitcher(
-        duration: SpectreMotion.normal,
-        switchInCurve: SpectreMotion.spring,
-        transitionBuilder: (c, a) => ScaleTransition(scale: a, child: FadeTransition(opacity: a, child: c)),
-        child: control == null
-            ? const SizedBox(key: ValueKey('none'), height: 1)
-            : FittedBox(key: ValueKey('${r.phase}|$myTurn|$involved|$seated'), fit: BoxFit.scaleDown, child: control),
       ),
     ]);
   }

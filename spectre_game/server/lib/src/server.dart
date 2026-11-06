@@ -691,6 +691,23 @@ class SpectreServer {
     return granted;
   }
 
+  /// Yeni üyeye admin'in seçtiği özellikler için ücretsiz deneme.
+  void _grantTrial(UserRec u) {
+    final s = store.settings;
+    if (!s.trialEnabled || s.trialFeatures.isEmpty || u.guest) return;
+    final until = DateTime.now().add(Duration(days: s.trialDays));
+    final names = <String>[];
+    for (final k in s.trialFeatures) {
+      final f = store.feature(k);
+      if (f == null) continue;
+      u.entitlements[k] = until;
+      names.add(f.name);
+    }
+    if (names.isEmpty) return;
+    store.markDirty();
+    _notify(u.id, 'order', '${s.trialDays} gün ücretsiz deneme: ${names.join(', ')}');
+  }
+
   /// Süresi dolan hakları kaldırır, bitmeden 3 gün önce uyarır.
   void checkExpiry(DateTime now) {
     for (final u in store.users.values) {
@@ -1130,6 +1147,7 @@ class SpectreServer {
         if (store.userByName(username) != null) throw ApiError(409, 'Bu kullanıcı adı alınmış');
         final u = _createUser(username, display.isEmpty ? username : _clip(display, 20), password, email: email);
         _sendVerify(u, welcome: true);
+        _grantTrial(u);
         return {'token': _issue(u.id, admin: false), 'me': meJson(u)};
       case 'authForgot' when m == 'POST':
         final b = await _body(req);

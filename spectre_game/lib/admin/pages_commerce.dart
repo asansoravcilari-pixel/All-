@@ -267,6 +267,44 @@ class _MarketAdminPageState extends State<MarketAdminPage> {
                         ),
                     ]),
             ),
+            Builder(builder: (context) {
+              final st = (d['settings'] as Map).cast<String, dynamic>();
+              final trial = [for (final x in (st['trialFeatures'] as List? ?? const [])) '$x'];
+              Future<void> put(Map<String, dynamic> v) =>
+                  act(context, () => admin.put('/settings', {'settings': v, 'what': 'Ücretsiz deneme'}), then: _bump);
+              return SectionCard(
+                title: 'Yeni üye ücretsiz deneme',
+                icon: Icons.card_giftcard_rounded,
+                trailing: Switch(value: st['trialEnabled'] == true, onChanged: (v) => put({'trialEnabled': v})),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    const Text('Süre: '),
+                    for (final dd in const [1, 2, 3, 7])
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: ChoiceChip(
+                          label: Text('$dd gün'),
+                          selected: jn(st['trialDays']) == dd,
+                          onSelected: st['trialEnabled'] == true ? (_) => put({'trialDays': dd}) : null,
+                        ),
+                      ),
+                  ]),
+                  const SizedBox(height: 8),
+                  const Text('Denemede açılacak özellikler:', style: TextStyle(fontSize: 12, color: SpectreColors.muted)),
+                  const SizedBox(height: 6),
+                  Wrap(spacing: 6, runSpacing: 6, children: [
+                    for (final f in features)
+                      FilterChip(
+                        label: Text('${f['name']}'),
+                        selected: trial.contains(f['key']),
+                        onSelected: st['trialEnabled'] == true
+                            ? (v) => put({'trialFeatures': v ? [...trial, '${f['key']}'] : trial.where((x) => x != f['key']).toList()})
+                            : null,
+                      ),
+                  ]),
+                ]),
+              );
+            }),
             SectionCard(
               title: 'Özellikler ve kilitler',
               icon: Icons.lock_person_rounded,
