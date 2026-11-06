@@ -146,6 +146,20 @@ class RoomState extends ChangeNotifier {
           }
         }
         notifyListeners();
+      case Ev.chatTranslated:
+        final id = '${data['id']}';
+        final tr = data['translations'];
+        if (tr is Map) {
+          for (final l in chat.reversed) {
+            if (l.id == id) {
+              for (final e in tr.entries) {
+                if (e.value is String) l.translations['${e.key}'] = e.value as String;
+              }
+              break;
+            }
+          }
+          notifyListeners();
+        }
       case Ev.gift:
         _fx(FxGift(data['fromSeat'] as int, data['toSeat'] as int,
             GiftInfo.fromJson((data['gift'] as Map).cast<String, dynamic>())));

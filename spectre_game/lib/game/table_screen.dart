@@ -8,7 +8,9 @@ import '../data/client.dart';
 import '../data/room_state.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
+import '../data/api.dart';
 import 'lobby_screen.dart';
+import 'social.dart';
 import 'table_stage.dart';
 
 // v39 masa sayfasının renkleri
@@ -33,9 +35,8 @@ class TableScreen extends StatefulWidget {
 
 class _TableScreenState extends State<TableScreen> {
   final _toasts = <_Notice>[];
-  final _inbox = <_Notice>[];
-  int _unread = 0;
   StreamSubscription<String>? _errSub;
+  StreamSubscription<String>? _noticeSub;
   bool _chatExpanded = false;
   int _noticeId = 0;
 
@@ -45,13 +46,16 @@ class _TableScreenState extends State<TableScreen> {
   void initState() {
     super.initState();
     t.addFxListener(_onFx);
-    _errSub = ClientScope.read(context).errors.listen((m) => _push(m, 'warn'));
+    final c = ClientScope.read(context);
+    _errSub = c.errors.listen((m) => _push(m, 'warn'));
+    _noticeSub = c.notices.listen((m) => _push(m, 'info'));
   }
 
   @override
   void dispose() {
     t.removeFxListener(_onFx);
     _errSub?.cancel();
+    _noticeSub?.cancel();
     super.dispose();
   }
 
@@ -62,15 +66,7 @@ class _TableScreenState extends State<TableScreen> {
       case FxNotice(:final text, :final kind):
         _push(text, kind);
       case FxMatch(:final a, :final b, :final success):
-        if (success && (a == mySeat || b == mySeat)) {
-          HapticFeedback.mediumImpact();
-          _push('Eşleştiniz! +1 ♥', 'success');
-        }
-      case FxGift(:final toSeat, :final gift, :final fromSeat):
-        if (toSeat == mySeat) {
-          final from = t.seats[fromSeat].player?.name ?? '';
-          _push('$from sana ${gift.emoji} ${gift.name} gönderdi!', 'gift');
-        }
+        if (success && (a == mySeat || b == mySeat)) HapticFeedback.mediumImpact();
       default:
         break;
     }
@@ -82,9 +78,6 @@ class _TableScreenState extends State<TableScreen> {
     setState(() {
       _toasts.add(n);
       if (_toasts.length > 3) _toasts.removeAt(0);
-      _inbox.insert(0, n);
-      if (_inbox.length > 50) _inbox.removeLast();
-      _unread++;
     });
     Future.delayed(const Duration(milliseconds: 3400), () {
       if (mounted) setState(() => _toasts.remove(n));
@@ -102,7 +95,12 @@ class _TableScreenState extends State<TableScreen> {
       if (c.me != null && t.seatOf(c.me!.id) == null) c.sit(seat: index);
       return;
     }
-    _sheet(_PlayerSheet(seat: seat, client: c, onGift: () => _openGifts(toSeat: index)));
+    _sheet(_PlayerSheet(
+      seat: seat,
+      client: c,
+      onGift: () => _openGifts(toSeat: index),
+      onMessage: () => showDmThread(context, c, seat.player!.userId),
+    ));
   }
 
   void _sheet(Widget child) => showModalBottomSheet<void>(
@@ -118,12 +116,12 @@ class _TableScreenState extends State<TableScreen> {
   void _openTables() {
     final c = ClientScope.read(context);
     c.refreshRooms();
-    _sheet(_SheetFrame(
+    _sheet(SheetFrame(
+      title: c.t('tools.tables', 'Aktif masa seçimi'),
+      subtitle: c.config.popup('tables'),
       child: ListenableBuilder(
         listenable: c,
-        builder: (ctx, _) => Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          const Text('Aktif masalar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 10),
+        builder: (ctx, _) => ListView(shrinkWrap: true, children: [
           for (final r in c.rooms)
             ListTile(
               contentPadding: EdgeInsets.zero,
@@ -157,28 +155,16 @@ class _TableScreenState extends State<TableScreen> {
     }
   }
 
-  void _openInbox() {
-    setState(() => _unread = 0);
-    _sheet(_SheetFrame(
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Text('Bildirimler', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-        const SizedBox(height: 8),
-        if (_inbox.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('Bildirim yok', textAlign: TextAlign.center)),
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 360),
-          child: ListView(shrinkWrap: true, children: [
-            for (final n in _inbox)
-              ListTile(dense: true, contentPadding: EdgeInsets.zero, leading: Icon(_noticeIcon(n.kind).$1, color: _noticeIcon(n.kind).$2), title: Text(n.text)),
-          ]),
-        ),
-      ]),
-    ));
-  }
+  void _openInbox() => _sheet(NotificationsSheet(client: ClientScope.read(context)));
+
+  void _openDms() => _sheet(DmInboxSheet(client: ClientScope.read(context)));
 
   void _exitMenu() {
     final c = ClientScope.read(context);
     final seated = c.me != null && t.seatOf(c.me!.id) != null;
-    _sheet(_SheetFrame(
+    _sheet(SheetFrame(
+      title: c.t('tools.exit', 'Çıkış menüsü'),
+      subtitle: c.config.popup('exit'),
       child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (seated)
           ListTile(
@@ -229,11 +215,12 @@ class _TableScreenState extends State<TableScreen> {
 
           final hud = _Hud(room: t, client: c, onCoins: () => Navigator.of(context).push(spectreRoute(const MarketScreen())));
           final tools = _ToolRow(
-            unread: _unread,
+            client: c,
+            unread: c.me?.unreadNotices ?? 0,
             onTables: _openTables,
             onBonus: c.me?.canClaimDaily == true ? _bonus : null,
             onMarket: () => Navigator.of(context).push(spectreRoute(const MarketScreen())),
-            onProfile: c.me == null ? null : () => _sheet(_ProfileSheet(client: c)),
+            onProfile: c.me == null ? null : () => _sheet(ProfileSheet(client: c)),
             onInbox: _openInbox,
             onExit: _exitMenu,
           );
@@ -250,6 +237,11 @@ class _TableScreenState extends State<TableScreen> {
           );
           final chat = _ChatWrap(
             room: t,
+            client: c,
+            onTapUser: (id) {
+              final seat = t.seatOf(id);
+              if (seat != null) _onSeatTap(seat);
+            },
             expanded: _chatExpanded,
             onToggle: two ? null : () => setState(() => _chatExpanded = !_chatExpanded),
           );
@@ -258,8 +250,9 @@ class _TableScreenState extends State<TableScreen> {
             seated: seated,
             onGift: () => _openGifts(),
             onGroupGift: () => _openGifts(group: true),
+            onMessages: _openDms,
           );
-          final link = _LinkLine(state: c.link, room: t);
+          final link = _LinkLine(state: c.link, room: t, client: c);
           final toasts = Positioned(
             top: 4,
             left: 12,
@@ -328,12 +321,6 @@ class _TableScreenState extends State<TableScreen> {
   }
 }
 
-(IconData, Color) _noticeIcon(String kind) => switch (kind) {
-      'success' => (Icons.favorite_rounded, SpectreColors.pink),
-      'warn' => (Icons.campaign_rounded, SpectreColors.amber),
-      'gift' => (Icons.card_giftcard_rounded, SpectreColors.gold),
-      _ => (Icons.info_outline_rounded, SpectreColors.accent),
-    };
 
 class StatusBadgeLite extends StatelessWidget {
   const StatusBadgeLite(this.text, {super.key});
@@ -389,11 +376,11 @@ class _Hud extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 5),
       child: Row(children: [
-        Expanded(child: cell(r?.name ?? '…', 'Tur ${room.round.roundNo}')),
+        Expanded(child: cell(r?.name ?? '…', '${client.t('hud.round', 'Tur')} ${room.round.roundNo}')),
         const SizedBox(width: 5),
-        Expanded(child: cell('${client.me?.hearts ?? 0}', 'Kalp')),
+        Expanded(child: cell('${client.me?.hearts ?? 0}', client.t('hud.hearts', 'Kalp'))),
         const SizedBox(width: 5),
-        Expanded(child: cell('${r?.countInGamePlayers ?? 0}/${r?.capacity ?? kSeatCount}', 'Oyuncu')),
+        Expanded(child: cell('${r?.countInGamePlayers ?? 0}/${r?.capacity ?? kSeatCount}', client.t('hud.players', 'Oyuncu'))),
         const SizedBox(width: 5),
         Expanded(
           flex: 115,
@@ -433,6 +420,7 @@ class _Hud extends StatelessWidget {
 
 class _ToolRow extends StatelessWidget {
   const _ToolRow({
+    required this.client,
     required this.unread,
     required this.onTables,
     required this.onBonus,
@@ -441,6 +429,7 @@ class _ToolRow extends StatelessWidget {
     required this.onInbox,
     required this.onExit,
   });
+  final SpectreClient client;
   final int unread;
   final VoidCallback onTables;
   final VoidCallback? onBonus;
@@ -455,13 +444,15 @@ class _ToolRow extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 9),
       decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: _line))),
       child: Row(children: [
-        _ToolButton(icon: Icons.table_restaurant_rounded, label: 'Aktif masa seçimi', onTap: onTables),
-        _ToolButton(icon: Icons.stars_rounded, label: 'Günlük bonus', onTap: onBonus, highlight: onBonus != null),
-        _ToolButton(icon: Icons.storefront_rounded, label: 'Market', onTap: onMarket),
-        _ToolButton(icon: Icons.person_rounded, label: 'Profil', onTap: onProfile),
-        _ToolButton(icon: Icons.notifications_rounded, label: 'Bildirimler', onTap: onInbox, badge: unread),
+        _ToolButton(icon: Icons.table_restaurant_rounded, label: client.t('tools.tables', 'Aktif masa seçimi'), onTap: onTables),
+        _ToolButton(
+            icon: Icons.stars_rounded, label: client.t('tools.bonus', 'Günlük bonus'), onTap: onBonus, highlight: onBonus != null),
+        _ToolButton(icon: Icons.storefront_rounded, label: client.t('tools.market', 'Market'), onTap: onMarket),
+        _ToolButton(icon: Icons.person_rounded, label: client.t('tools.profile', 'Profil'), onTap: onProfile),
+        _ToolButton(
+            icon: Icons.notifications_rounded, label: client.t('tools.notifications', 'Bildirimler'), onTap: onInbox, badge: unread),
         const Spacer(),
-        _ToolButton(icon: Icons.logout_rounded, label: 'Çıkış menüsü', onTap: onExit, gap: false),
+        _ToolButton(icon: Icons.logout_rounded, label: client.t('tools.exit', 'Çıkış menüsü'), onTap: onExit, gap: false),
       ]),
     );
   }
@@ -519,23 +510,7 @@ class _ToolButtonState extends State<_ToolButton> {
                   ),
                   child: Icon(widget.icon, size: 20, color: enabled ? (widget.highlight ? SpectreColors.gold : _btnInk) : _btnBorder),
                 ),
-                if (widget.badge > 0)
-                  Positioned(
-                    right: -5,
-                    top: -5,
-                    child: Container(
-                      constraints: const BoxConstraints(minWidth: 18),
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: const Color(0xFFDCD7DF)),
-                      ),
-                      child: Text(widget.badge > 99 ? '99+' : '${widget.badge}',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: Color(0xFFCA1A49), fontSize: 10, fontWeight: FontWeight.w800, height: 1.7)),
-                    ),
-                  ),
+                if (widget.badge > 0) Positioned(right: -5, top: -5, child: CountBadge(count: widget.badge)),
               ]),
             ),
           ),
@@ -569,12 +544,13 @@ class _RoundCentre extends StatelessWidget {
 
     String status;
     Color color = _hudSmall;
+    final c = client;
     if (!r.active) {
-      status = room.occupied == 0 ? 'Masa boş' : 'İkinci oyuncu bekleniyor';
+      status = room.occupied == 0 ? c.t('table.empty', 'Masa boş') : c.t('table.waiting', 'İkinci oyuncu bekleniyor');
     } else {
       switch (r.phase) {
         case RoundPhase.idle:
-          status = myTurn ? 'Sıra sende' : 'Sıra: ${spinner?.name ?? '-'}';
+          status = myTurn ? c.t('table.yourTurn', 'Sıra sende') : 'Sıra: ${spinner?.name ?? '-'}';
           if (myTurn) color = SpectreColors.accent;
         case RoundPhase.spinning:
           status = '${spinner?.name ?? ''} çeviriyor…';
@@ -583,7 +559,7 @@ class _RoundCentre extends StatelessWidget {
           color = SpectreColors.pink;
         case RoundPhase.result:
           final ok = (r.spinnerAccepted ?? false) && (r.targetAccepted ?? false);
-          status = ok ? '💞 Eşleşme!' : 'Pas geçildi';
+          status = ok ? '💞 ${c.t('table.match', 'Eşleşme!')}' : c.t('table.pass', 'Pas geçildi');
           color = ok ? SpectreColors.green : _hudSmall;
       }
     }
@@ -591,19 +567,21 @@ class _RoundCentre extends StatelessWidget {
     Widget? control;
     if (!seated) {
       control = _CentreButton(
-        label: 'Otur',
+        label: c.t('table.sit', 'Otur'),
         icon: Icons.event_seat_rounded,
         onTap: room.isFull || (room.room?.locked ?? false) ? null : () => client.sit(),
       );
     } else if (involved) {
       control = Row(mainAxisSize: MainAxisSize.min, children: [
-        _CentreButton(label: 'Pas', icon: Icons.close_rounded, color: SpectreColors.red, onTap: () => client.decide(false)),
+        _CentreButton(
+            label: c.t('table.reject', 'Pas'), icon: Icons.close_rounded, color: SpectreColors.red, onTap: () => client.decide(false)),
         Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: _Countdown(room: room)),
-        _CentreButton(label: 'Kabul', icon: Icons.favorite_rounded, color: SpectreColors.pink, onTap: () => client.decide(true)),
+        _CentreButton(
+            label: c.t('table.accept', 'Kabul'), icon: Icons.favorite_rounded, color: SpectreColors.pink, onTap: () => client.decide(true)),
       ]);
     } else if (myTurn) {
       control = _CentreButton(
-        label: 'ÇEVİR',
+        label: c.t('table.spin', 'ÇEVİR'),
         icon: Icons.autorenew_rounded,
         pulse: true,
         onTap: () {
@@ -705,8 +683,10 @@ class _Countdown extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _ChatWrap extends StatelessWidget {
-  const _ChatWrap({required this.room, required this.expanded, required this.onToggle});
+  const _ChatWrap({required this.room, required this.client, required this.onTapUser, required this.expanded, required this.onToggle});
   final RoomState room;
+  final SpectreClient client;
+  final void Function(String userId) onTapUser;
   final bool expanded;
   final VoidCallback? onToggle;
 
@@ -717,7 +697,8 @@ class _ChatWrap extends StatelessWidget {
       Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 4, 2),
         child: Row(children: [
-          const Text('Masa Sohbeti', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: _hudSmall, letterSpacing: 0.4)),
+          Text(client.t('chat.title', 'Masa Sohbeti'),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: _hudSmall, letterSpacing: 0.4)),
           const Spacer(),
           if (onToggle != null)
             IconButton(
@@ -739,10 +720,15 @@ class _ChatWrap extends StatelessWidget {
                 reverse: true,
                 padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
                 itemCount: msgs.length,
-                itemBuilder: (_, i) => Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: _ChatLineView(m: msgs[msgs.length - 1 - i]),
-                ),
+                itemBuilder: (_, i) {
+                  final m = msgs[msgs.length - 1 - i];
+                  return ChatLineView(
+                    key: ValueKey(m.id.isEmpty ? '${m.at.millisecondsSinceEpoch}-$i' : m.id),
+                    m: m,
+                    lang: client.me?.lang ?? 'tr',
+                    onTapUser: onTapUser,
+                  );
+                },
               ),
       ),
     ]);
@@ -754,11 +740,18 @@ class _ChatWrap extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _Composer extends StatefulWidget {
-  const _Composer({required this.client, required this.seated, required this.onGift, required this.onGroupGift});
+  const _Composer({
+    required this.client,
+    required this.seated,
+    required this.onGift,
+    required this.onGroupGift,
+    required this.onMessages,
+  });
   final SpectreClient client;
   final bool seated;
   final VoidCallback onGift;
   final VoidCallback onGroupGift;
+  final VoidCallback onMessages;
 
   @override
   State<_Composer> createState() => _ComposerState();
@@ -809,11 +802,13 @@ class _ComposerState extends State<_Composer> {
   Widget build(BuildContext context) {
     final seated = widget.seated;
     final hasGifts = widget.client.gifts.isNotEmpty;
-    Widget btn(IconData i, String label, VoidCallback? f, {Color? color}) => Padding(
+    final c = widget.client;
+    Widget btn(IconData i, String label, VoidCallback? f, {Color? color, int badge = 0}) => Padding(
           padding: const EdgeInsets.only(left: 4),
           child: Tooltip(
             message: label,
-            child: Material(
+            child: Stack(clipBehavior: Clip.none, children: [
+              Material(
               color: _btnBg,
               shape: RoundedRectangleBorder(side: const BorderSide(color: _btnBorder), borderRadius: BorderRadius.circular(5)),
               child: InkWell(
@@ -826,6 +821,8 @@ class _ComposerState extends State<_Composer> {
                 ),
               ),
             ),
+              if (badge > 0) Positioned(right: -5, top: -5, child: CountBadge(count: badge)),
+            ]),
           ),
         );
     return Container(
@@ -842,7 +839,7 @@ class _ComposerState extends State<_Composer> {
             style: const TextStyle(fontSize: 14),
             decoration: InputDecoration(
               counterText: '',
-              hintText: seated ? 'Mesaj yaz' : 'Yazmak için masaya otur',
+              hintText: seated ? c.t('chat.placeholder', 'Mesaj yaz') : c.t('chat.sitToWrite', 'Yazmak için masaya otur'),
               contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(5), borderSide: const BorderSide(color: _btnBorder)),
               enabledBorder:
@@ -850,9 +847,13 @@ class _ComposerState extends State<_Composer> {
             ),
           ),
         ),
-        btn(Icons.emoji_emotions_rounded, 'Tepki', seated ? _react : null),
-        btn(Icons.card_giftcard_rounded, 'Oyuncuya hediye', seated && hasGifts ? widget.onGift : null, color: SpectreColors.gold),
-        btn(Icons.volunteer_activism_rounded, 'Toplu hediye', seated && hasGifts ? widget.onGroupGift : null, color: SpectreColors.gold),
+        btn(Icons.emoji_emotions_rounded, c.t('composer.react', 'Tepki'), seated ? _react : null),
+        btn(Icons.card_giftcard_rounded, c.t('composer.gift', 'Oyuncuya hediye'), seated && hasGifts ? widget.onGift : null,
+            color: SpectreColors.gold),
+        btn(Icons.volunteer_activism_rounded, c.t('composer.groupGift', 'Toplu hediye'),
+            seated && hasGifts ? widget.onGroupGift : null,
+            color: SpectreColors.gold),
+        btn(Icons.mail_rounded, c.t('composer.messages', 'Mesaj kutusu'), widget.onMessages, badge: c.me?.unreadDms ?? 0),
         btn(Icons.send_rounded, 'Gönder', seated ? _send : null, color: SpectreColors.accent),
       ]),
     );
@@ -864,16 +865,17 @@ class _ComposerState extends State<_Composer> {
 // ---------------------------------------------------------------------------
 
 class _LinkLine extends StatelessWidget {
-  const _LinkLine({required this.state, required this.room});
+  const _LinkLine({required this.state, required this.room, required this.client});
   final LinkState state;
   final RoomState room;
+  final SpectreClient client;
 
   @override
   Widget build(BuildContext context) {
     final (c, text) = switch (state) {
-      LinkState.online => (SpectreColors.green, 'Canlı bağlantı · ${room.room?.name ?? ''}'),
+      LinkState.online => (SpectreColors.green, '${client.t('link.online', 'Canlı bağlantı')} · ${room.room?.name ?? ''}'),
       LinkState.connecting => (SpectreColors.amber, 'Bağlanıyor…'),
-      LinkState.offline => (SpectreColors.red, 'Canlı oyun bağlantısı yok — yeniden deneniyor'),
+      LinkState.offline => (SpectreColors.red, client.t('link.offline', 'Canlı oyun bağlantısı yok')),
     };
     return Container(
       width: double.infinity,
@@ -884,42 +886,6 @@ class _LinkLine extends StatelessWidget {
         const SizedBox(width: 6),
         Text(text, style: TextStyle(fontSize: 11, color: c)),
       ]),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Profil
-// ---------------------------------------------------------------------------
-
-class _ProfileSheet extends StatelessWidget {
-  const _ProfileSheet({required this.client});
-  final SpectreClient client;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: client,
-      builder: (context, _) {
-        final me = client.me;
-        if (me == null) return const SizedBox.shrink();
-        return _SheetFrame(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            PlayerAvatar(player: me.asSeatPlayer(), size: 84, presence: Presence.online),
-            const SizedBox(height: 10),
-            Text(me.displayName, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-            Text('@${me.username}', style: const TextStyle(color: SpectreColors.muted)),
-            const SizedBox(height: 10),
-            Wrap(spacing: 6, runSpacing: 6, alignment: WrapAlignment.center, children: [
-              Chip(label: Text('Seviye ${me.level}')),
-              Chip(label: Text('♥ ${me.hearts}')),
-              Chip(label: Text('🪙 ${me.coins}')),
-              if (me.vip) const Chip(label: Text('👑 VIP')),
-              if (me.guest) const Chip(label: Text('Misafir')),
-            ]),
-          ]),
-        );
-      },
     );
   }
 }
@@ -1063,70 +1029,16 @@ class _NoticeToast extends StatelessWidget {
   }
 }
 
-class _ChatLineView extends StatelessWidget {
-  const _ChatLineView({required this.m});
-  final ChatLine m;
-  static const compact = false;
-
-  @override
-  Widget build(BuildContext context) {
-    if (m.system) {
-      return Text(m.text,
-          maxLines: compact ? 1 : null,
-          overflow: compact ? TextOverflow.ellipsis : null,
-          style: const TextStyle(color: SpectreColors.muted, fontSize: 12, fontStyle: FontStyle.italic));
-    }
-    return Text.rich(
-      TextSpan(children: [
-        TextSpan(text: '${m.name}: ', style: TextStyle(color: Color(m.color), fontWeight: FontWeight.w800, fontSize: 13)),
-        TextSpan(text: m.text, style: const TextStyle(fontSize: 13)),
-      ]),
-      maxLines: compact ? 1 : null,
-      overflow: compact ? TextOverflow.ellipsis : null,
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Alt sayfalar
 // ---------------------------------------------------------------------------
 
-class _SheetFrame extends StatelessWidget {
-  const _SheetFrame({required this.child});
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
-      child: Center(
-        heightFactor: 1,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 560),
-          child: GlassPanel(
-            radius: 26,
-            padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 14),
-                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(4)),
-              ),
-              child,
-            ]),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _PlayerSheet extends StatefulWidget {
-  const _PlayerSheet({required this.seat, required this.client, required this.onGift});
+  const _PlayerSheet({required this.seat, required this.client, required this.onGift, required this.onMessage});
   final SeatView seat;
   final SpectreClient client;
   final VoidCallback onGift;
+  final VoidCallback onMessage;
 
   @override
   State<_PlayerSheet> createState() => _PlayerSheetState();
@@ -1139,7 +1051,7 @@ class _PlayerSheetState extends State<_PlayerSheet> {
   void initState() {
     super.initState();
     final p = widget.seat.player!;
-    widget.client.api.get('/user/api/v1/user/${p.userId}').then((v) {
+    widget.client.api.get(ApiConfig.ep('user', {'userId': p.userId})).then((v) {
       if (mounted) setState(() => _profile = v);
     }).catchError((_) {});
   }
@@ -1149,11 +1061,11 @@ class _PlayerSheetState extends State<_PlayerSheet> {
     final p = widget.seat.player!;
     final isMe = p.userId == widget.client.me?.id;
     final online = _profile?['isOnline'] == true;
-    return _SheetFrame(
+    return SheetFrame(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          PlayerAvatar(player: p, size: 84, presence: widget.seat.presence),
+          SquareAvatar(name: p.name, color: p.color, url: p.avatarUrl, size: 92, online: _profile == null ? null : online),
           const SizedBox(height: 10),
           Text(p.name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
           const SizedBox(height: 6),
@@ -1169,23 +1081,40 @@ class _PlayerSheetState extends State<_PlayerSheet> {
           ]),
           const SizedBox(height: 18),
           if (!isMe)
-            SizedBox(
-              width: double.infinity,
-              child: PressButton(
-                color: SpectreColors.gold,
-                onTap: widget.client.gifts.isEmpty
-                    ? null
-                    : () {
-                        Navigator.pop(context);
-                        widget.onGift();
-                      },
-                child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  Icon(Icons.card_giftcard_rounded),
-                  SizedBox(width: 8),
-                  Text('Hediye gönder'),
-                ]),
+            Row(children: [
+              Expanded(
+                child: PressButton(
+                  color: SpectreColors.gold,
+                  onTap: widget.client.gifts.isEmpty
+                      ? null
+                      : () {
+                          Navigator.pop(context);
+                          widget.onGift();
+                        },
+                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const Icon(Icons.card_giftcard_rounded),
+                    const SizedBox(width: 8),
+                    Flexible(child: Text(widget.client.t('composer.gift', 'Hediye gönder'), overflow: TextOverflow.ellipsis)),
+                  ]),
+                ),
               ),
-            )
+              const SizedBox(width: 10),
+              Expanded(
+                child: PressButton(
+                  onTap: widget.client.me?.guest == true
+                      ? null
+                      : () {
+                          Navigator.pop(context);
+                          widget.onMessage();
+                        },
+                  child: const Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    Icon(Icons.mail_rounded),
+                    SizedBox(width: 8),
+                    Text('Mesaj gönder'),
+                  ]),
+                ),
+              ),
+            ])
           else
             PressButton(
               filled: false,
@@ -1232,15 +1161,21 @@ class _GiftSheetState extends State<_GiftSheet> {
     _target ??= others.isNotEmpty ? others.first.index : null;
     final cats = ['Tümü', ...{for (final g in c.gifts) g.category}];
     final gifts = c.gifts.where((g) => _cat == 'Tümü' || g.category == _cat).toList();
-    return _SheetFrame(
+    return SheetFrame(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(children: [
-            Text(widget.group ? 'Toplu hediye (${others.length} kişi)' : 'Hediye gönder',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-            const Spacer(),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(widget.group ? '${c.t('composer.groupGift', 'Toplu hediye')} (${others.length})' : c.t('composer.gift', 'Hediye gönder'),
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                if (c.config.popup(widget.group ? 'groupGift' : 'gift').isNotEmpty)
+                  Text(c.config.popup(widget.group ? 'groupGift' : 'gift'),
+                      style: const TextStyle(fontSize: 12, color: SpectreColors.muted)),
+              ]),
+            ),
             ListenableBuilder(listenable: c, builder: (_, __) => CoinPill(coins: c.me?.coins ?? 0)),
           ]),
           const SizedBox(height: 12),

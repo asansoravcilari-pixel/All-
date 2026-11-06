@@ -243,6 +243,16 @@ class GameTable {
     _changed();
   }
 
+  /// Oturan oyuncunun görünen bilgileri değişti (ad, fotoğraf, seviye…).
+  void updatePlayer(SeatPlayer p) {
+    final idx = seatOf(p.userId);
+    if (idx == null) return;
+    p.hearts = seats[idx].player!.hearts;
+    seats[idx].player = p;
+    _emit(SeatUpdated(idx, p));
+    _changed();
+  }
+
   /// Bağlantı koptu/geri geldi. Kopukken koltuk [TableRules.disconnectGrace] kadar korunur.
   void setConnected(String userId, bool connected, DateTime now) {
     final idx = seatOf(userId);
@@ -319,10 +329,29 @@ class GameTable {
     if (idx == null || clean.isEmpty || !rules.chatEnabled) return false;
     final p = seats[idx].player!;
     final line = ChatLine(
-        userId: p.userId, name: p.name, color: p.color, text: clean.length > 200 ? clean.substring(0, 200) : clean);
+      id: 'c${++_chatSeq}',
+      userId: p.userId,
+      name: p.name,
+      color: p.color,
+      avatarUrl: p.avatarUrl,
+      text: clean.length > 200 ? clean.substring(0, 200) : clean,
+    );
     _addChat(line);
     _emit(ChatEvent(line));
     return true;
+  }
+
+  int _chatSeq = 0;
+
+  /// Sunucu çeviri servisinden dönen metinleri satıra ekler.
+  ChatLine? addTranslations(String lineId, Map<String, String> t) {
+    for (final l in chat.reversed) {
+      if (l.id == lineId) {
+        l.translations.addAll(t);
+        return l;
+      }
+    }
+    return null;
   }
 
   bool react(String userId, String emoji) {
@@ -457,7 +486,7 @@ class GameTable {
   }
 
   void _system(String text) {
-    final line = ChatLine(text: text, system: true);
+    final line = ChatLine(id: 'c${++_chatSeq}', text: text, system: true);
     _addChat(line);
     _emit(ChatEvent(line));
   }

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/widgets.dart';
 
 import '../data/api.dart';
@@ -31,6 +33,9 @@ class AdminClient extends ChangeNotifier {
   Future<Map<String, dynamic>> get(String path, [Map<String, String>? q]) => _guard(api.get('/admin/api/v1$path', q));
   Future<Map<String, dynamic>> post(String path, [Object? body]) => _guard(api.post('/admin/api/v1$path', body));
   Future<Map<String, dynamic>> put(String path, Object body) => _guard(api.put('/admin/api/v1$path', body));
+
+  /// Görsel yükler, sunucudaki adresini döner (`/uploads/...`).
+  Future<String> upload(Uint8List bytes) async => '${(await _guard(api.upload('/admin/api/v1/upload', bytes)))['url']}';
 
   Future<Map<String, dynamic>> _guard(Future<Map<String, dynamic>> f) async {
     try {

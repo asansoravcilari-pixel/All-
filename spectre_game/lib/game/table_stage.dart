@@ -482,6 +482,12 @@ class _FxLayerState extends State<_FxLayer> with TickerProviderStateMixin {
           }
           _spawn(const Duration(milliseconds: 1400), (t) => _pulse(g.seat(a), g.seatSide, SpectreColors.pink, t));
           _spawn(const Duration(milliseconds: 1400), (t) => _pulse(g.seat(b), g.seatSide, SpectreColors.pink, t));
+          _spawn(const Duration(milliseconds: 1600), (t) => _centreIcon(g.center, '💞', t, grow: true));
+        } else {
+          // Red: ortada kırık kalp, iki koltukta kırmızı sönen çerçeve
+          _spawn(const Duration(milliseconds: 1400), (t) => _centreIcon(g.center, '💔', t, shake: true));
+          _spawn(const Duration(milliseconds: 1000), (t) => _pulse(g.seat(a), g.seatSide, SpectreColors.red, t));
+          _spawn(const Duration(milliseconds: 1000), (t) => _pulse(g.seat(b), g.seatSide, SpectreColors.red, t));
         }
       case FxSeat(:final seat, :final joined):
         if (joined) _spawn(const Duration(milliseconds: 900), (t) => _pulse(g.seat(seat), g.seatSide, SpectreColors.accent, t));
@@ -536,6 +542,21 @@ class _FxLayerState extends State<_FxLayer> with TickerProviderStateMixin {
       left: p.dx - 10,
       top: p.dy - 10,
       child: Opacity(opacity: (1 - t).clamp(0, 1), child: Text(s, style: const TextStyle(fontSize: 18))),
+    );
+  }
+
+  Widget _centreIcon(Offset c, String s, double t, {bool grow = false, bool shake = false}) {
+    final appear = Curves.easeOutBack.transform((t / 0.35).clamp(0.0, 1.0));
+    final fade = t > 0.7 ? (1 - t) / 0.3 : 1.0;
+    final dx = shake ? math.sin(t * 40) * 6 * (1 - t) : 0.0;
+    final scale = appear * (grow ? 1 + t * 0.5 : 1);
+    return Positioned(
+      left: c.dx - 28 + dx,
+      top: c.dy - 28 - (grow ? t * 20 : 0),
+      child: Opacity(
+        opacity: fade.clamp(0, 1),
+        child: Transform.scale(scale: scale, child: Text(s, style: const TextStyle(fontSize: 48))),
+      ),
     );
   }
 

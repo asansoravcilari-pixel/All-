@@ -19,11 +19,20 @@ class SpectreApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return ClientScope(
       client: client,
-      child: MaterialApp(
-        title: 'SPECTRE',
-        debugShowCheckedModeBanner: false,
-        theme: buildSpectreTheme(),
-        home: const _Gate(),
+      child: ListenableBuilder(
+        listenable: client,
+        builder: (context, _) => MaterialApp(
+          title: client.config.brandName,
+          debugShowCheckedModeBanner: false,
+          theme: buildSpectreTheme(),
+          builder: (context, child) => Brand(
+            background: parseHexColor(client.config.backgroundColor),
+            backgroundImage: client.config.backgroundImageUrl,
+            logo: client.config.logoUrl,
+            child: child!,
+          ),
+          home: const _Gate(),
+        ),
       ),
     );
   }

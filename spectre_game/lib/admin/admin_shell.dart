@@ -4,6 +4,7 @@ import '../data/api.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
 import 'admin_client.dart';
+import 'pages_brand.dart';
 import 'pages_commerce.dart';
 import 'pages_core.dart';
 import 'pages_system.dart';
@@ -23,7 +24,10 @@ final adminSections = <AdminSection>[
   AdminSection('Market', Icons.storefront_rounded, () => const MarketAdminPage()),
   AdminSection('Siparişler & Ödeme', Icons.receipt_long_rounded, () => const OrdersPage()),
   AdminSection('Sistem & Güvenlik', Icons.shield_rounded, () => const SystemPage()),
-  AdminSection('Marka & Oyun', Icons.palette_rounded, () => const BrandGamePage()),
+  AdminSection('Görünüm', Icons.palette_rounded, () => const AppearancePage()),
+  AdminSection('Metinler & Pencereler', Icons.text_fields_rounded, () => const TextsPage()),
+  AdminSection('Marka & Oyun', Icons.tune_rounded, () => const BrandGamePage()),
+  AdminSection('Bağlantı & Çeviri', Icons.alt_route_rounded, () => const ConnectionPage()),
 ];
 
 /// Yönetim merkezi. Giriş kullanıcı adı + şifre ile; doğrulama sunucuda yapılır.

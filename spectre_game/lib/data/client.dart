@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -23,9 +24,15 @@ class Me {
   bool get vip => j['role'] == 'vip';
   bool get canClaimDaily => j['canClaimDaily'] == true;
   String get status => '${j['status'] ?? 'active'}';
+  String get avatarUrl => '${j['avatarUrl'] ?? ''}';
+  String get lang => '${j['lang'] ?? 'tr'}';
+  int get unreadNotices => (j['unreadNotices'] as num?)?.toInt() ?? 0;
+  int get unreadDms => (j['unreadDms'] as num?)?.toInt() ?? 0;
 
-  SeatPlayer asSeatPlayer() =>
-      SeatPlayer(userId: id, name: displayName, color: color, level: level, vip: vip, hearts: hearts);
+  Me copyWith(Map<String, dynamic> patch) => Me({...j, ...patch});
+
+  SeatPlayer asSeatPlayer() => SeatPlayer(
+      userId: id, name: displayName, color: color, level: level, vip: vip, hearts: hearts, avatarUrl: mediaUrl(avatarUrl));
 }
 
 class PublicConfig {
@@ -39,6 +46,43 @@ class PublicConfig {
   bool get guestLogin => j['guestLogin'] == true;
   bool get marketOpen => j['marketOpen'] == true;
   Map<String, dynamic> get payment => (j['payment'] as Map?)?.cast<String, dynamic>() ?? const {};
+  String get backgroundColor => '${j['backgroundColor'] ?? ''}';
+  String get backgroundImageUrl => mediaUrl('${j['backgroundImageUrl'] ?? ''}');
+  String get logoUrl => mediaUrl('${j['logoUrl'] ?? ''}');
+  bool get translate => j['translate'] == true;
+  List<String> get languages => [for (final l in (j['languages'] as List? ?? const ['tr'])) '$l'];
+
+  /// Yönetim panelinden düzenlenen arayüz metni.
+  String t(String key, String fallback) {
+    final m = j['texts'];
+    final v = m is Map ? m[key] : null;
+    return v is String && v.isNotEmpty ? v : fallback;
+  }
+
+  /// Açılır pencere açıklama metni (boş olabilir).
+  String popup(String key) {
+    final m = j['popups'];
+    final v = m is Map ? m[key] : null;
+    return v is String ? v : '';
+  }
+}
+
+/// Özel mesaj.
+class DmMessage {
+  DmMessage(this.j);
+  final Map<String, dynamic> j;
+  String get id => '${j['id']}';
+  String get from => '${j['from']}';
+  String get to => '${j['to']}';
+  String get text => '${j['text'] ?? ''}';
+  String get fromName => '${j['fromName'] ?? ''}';
+  String get fromAvatar => mediaUrl('${j['fromAvatar'] ?? ''}');
+  int get fromColor => (j['fromColor'] as num?)?.toInt() ?? 0xFF65C5FF;
+  DateTime get at => DateTime.tryParse('${j['at']}')?.toLocal() ?? DateTime.now();
+  String? translation(String lang) {
+    final t = j['translations'];
+    return t is Map && t[lang] is String ? t[lang] as String : null;
+  }
 }
 
 enum LinkState { offline, connecting, online }
@@ -85,7 +129,7 @@ class SpectreClient extends ChangeNotifier {
       if (token != null) {
         api.token = token;
         try {
-          me = Me(await api.get('/api/v1/me'));
+          me = Me(await api.get(ApiConfig.ep('me')));
           await _afterLogin();
         } on ApiException catch (e) {
           if (e.status == 401 || e.status == 403) {
@@ -105,17 +149,22 @@ class SpectreClient extends ChangeNotifier {
   }
 
   Future<void> refreshConfig() async {
-    config = PublicConfig(await api.get('/api/v1/config'));
+    final j = await api.get('/api/v1/config');
+    ApiConfig.apply(j);
+    config = PublicConfig(j);
     notifyListeners();
   }
 
+  /// Arayüz metni kısayolu.
+  String t(String key, String fallback) => config.t(key, fallback);
+
   Future<void> login(String username, String password) =>
-      _auth(api.post('/api/v1/auth/login', {'username': username, 'password': password}));
+      _auth(api.post(ApiConfig.ep('authLogin'), {'username': username, 'password': password}));
 
   Future<void> register(String username, String password, String displayName) => _auth(api.post(
-      '/api/v1/auth/register', {'username': username, 'password': password, 'displayName': displayName}));
+      ApiConfig.ep('authRegister'), {'username': username, 'password': password, 'displayName': displayName}));
 
-  Future<void> guest() => _auth(api.post('/api/v1/auth/guest'));
+  Future<void> guest() => _auth(api.post(ApiConfig.ep('authGuest')));
 
   Future<void> _auth(Future<Map<String, dynamic>> f) async {
     final r = await f;
@@ -131,7 +180,7 @@ class SpectreClient extends ChangeNotifier {
 
   Future<void> logout() async {
     try {
-      await api.post('/api/v1/auth/logout');
+      await api.post(ApiConfig.ep('authLogout'));
     } catch (_) {}
     api.token = null;
     me = null;
@@ -157,7 +206,7 @@ class SpectreClient extends ChangeNotifier {
 
   Future<void> refreshRooms() async {
     try {
-      final r = await api.get('/room/api/v1/room');
+      final r = await api.get(ApiConfig.ep('roomList'));
       rooms = [for (final x in (r['items'] as List? ?? const [])) RoomSummary.fromJson((x as Map).cast<String, dynamic>())];
       notifyListeners();
     } on ApiException catch (e) {
@@ -167,22 +216,69 @@ class SpectreClient extends ChangeNotifier {
 
   Future<void> _loadGifts() async {
     try {
-      final r = await api.get('/api/v1/gifts');
+      final r = await api.get(ApiConfig.ep('gifts'));
       gifts = [for (final x in (r['items'] as List? ?? const [])) GiftInfo.fromJson((x as Map).cast<String, dynamic>())];
     } catch (_) {}
   }
 
   Future<int> claimDaily() async {
-    final r = await api.post('/api/v1/me/daily');
+    final r = await api.post(ApiConfig.ep('meDaily'));
     me = Me((r['me'] as Map).cast<String, dynamic>());
     notifyListeners();
     return (r['amount'] as num).toInt();
   }
 
   Future<void> rename(String name) async {
-    me = Me(await api.patch('/api/v1/me', {'displayName': name}));
+    me = Me(await api.patch(ApiConfig.ep('me'), {'displayName': name}));
     notifyListeners();
   }
+
+  Future<void> setLang(String lang) async {
+    me = Me(await api.patch(ApiConfig.ep('me'), {'lang': lang}));
+    notifyListeners();
+  }
+
+  Future<void> uploadAvatar(Uint8List bytes) async {
+    me = Me(await api.upload(ApiConfig.ep('meAvatar'), bytes));
+    notifyListeners();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Bildirimler ve özel mesajlar
+  // ---------------------------------------------------------------------------
+
+  final _dmCtl = StreamController<DmMessage>.broadcast();
+
+  /// Gelen/giden özel mesajlar (açık sohbet penceresi dinler).
+  Stream<DmMessage> get dmStream => _dmCtl.stream;
+
+  Future<List<Map<String, dynamic>>> notifications() async {
+    final r = await api.get(ApiConfig.ep('notifications'));
+    return [for (final x in (r['items'] as List? ?? const [])) (x as Map).cast<String, dynamic>()];
+  }
+
+  Future<void> markNotificationsRead() async {
+    await api.post(ApiConfig.ep('notificationsRead'));
+    if (me != null) me = me!.copyWith({'unreadNotices': 0});
+    notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> dmThreads() => api.get(ApiConfig.ep('dmThreads'));
+
+  Future<(Map<String, dynamic> peer, List<DmMessage> items)> dmThread(String userId) async {
+    final r = await api.get(ApiConfig.ep('dmThread', {'userId': userId}));
+    // Okunan mesajlar sunucuda işaretlendi; sayacı tazele.
+    try {
+      me = Me(await api.get(ApiConfig.ep('me')));
+      notifyListeners();
+    } catch (_) {}
+    return (
+      (r['peer'] as Map).cast<String, dynamic>(),
+      [for (final x in (r['items'] as List? ?? const [])) DmMessage((x as Map).cast<String, dynamic>())]
+    );
+  }
+
+  Future<void> sendDm(String userId, String text) => api.post(ApiConfig.ep('dmThread', {'userId': userId}), {'text': text});
 
   Future<void> setLightMode(bool v) async {
     lightMode = v;
@@ -271,6 +367,18 @@ class SpectreClient extends ChangeNotifier {
         notifyListeners();
       case Ev.error:
         _errors.add('${data['message']}');
+      case Ev.notify:
+        if (me != null) {
+          me = me!.copyWith({'unreadNotices': data['unread'], 'unreadDms': data['unreadDm']});
+        }
+        final n = data['notice'];
+        if (n is Map) _noticeCtl.add('${n['text']}');
+        notifyListeners();
+      case Ev.dm:
+        final m = DmMessage(data);
+        if (me != null && data['unreadDm'] != null) me = me!.copyWith({'unreadDms': data['unreadDm']});
+        _dmCtl.add(m);
+        notifyListeners();
       default:
         final r = room;
         if (r != null && channel == roomChannel(r.roomId)) r.handle(event, data);
@@ -326,12 +434,17 @@ class SpectreClient extends ChangeNotifier {
   // ---------------------------------------------------------------------------
 
   Future<List<Map<String, dynamic>>> packages() async {
-    final r = await api.get('/api/v1/market/packages');
+    final r = await api.get(ApiConfig.ep('packages'));
     return [for (final x in (r['items'] as List? ?? const [])) (x as Map).cast<String, dynamic>()];
   }
 
   Future<Map<String, dynamic>> createOrder(String packageId, String provider) =>
-      api.post('/api/v1/orders', {'packageId': packageId, 'provider': provider});
+      api.post(ApiConfig.ep('orders'), {'packageId': packageId, 'provider': provider});
+
+  final _noticeCtl = StreamController<String>.broadcast();
+
+  /// Sunucudan gelen yeni bildirim metinleri (anlık kart için).
+  Stream<String> get notices => _noticeCtl.stream;
 
   @override
   void dispose() {
@@ -339,6 +452,8 @@ class SpectreClient extends ChangeNotifier {
     _closeWs();
     _poll?.cancel();
     _errors.close();
+    _dmCtl.close();
+    _noticeCtl.close();
     super.dispose();
   }
 }

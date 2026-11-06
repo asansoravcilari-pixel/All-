@@ -73,14 +73,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    ShaderMask(
-                      shaderCallback: (r) =>
-                          const LinearGradient(colors: [SpectreColors.cyan, SpectreColors.accent, Color(0xFF3A5BFF)])
-                              .createShader(r),
-                      child: Text(cfg.brandName,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(fontSize: 40, fontWeight: FontWeight.w900, letterSpacing: 8, color: Colors.white)),
-                    ),
+                    Center(child: BrandLogo(text: cfg.brandName, size: 40, letterSpacing: 8)),
                     if (cfg.tagline.isNotEmpty)
                       Text(cfg.tagline, textAlign: TextAlign.center, style: const TextStyle(color: SpectreColors.muted)),
                     const SizedBox(height: 24),
@@ -104,8 +97,8 @@ class _LoginScreenState extends State<LoginScreen> {
                           children: [
                             SegmentedButton<bool>(
                               segments: [
-                                const ButtonSegment(value: false, label: Text('Giriş yap')),
-                                ButtonSegment(value: true, label: const Text('Kayıt ol'), enabled: cfg.registrationOpen),
+                                ButtonSegment(value: false, label: Text(cfg.t('login.title', 'Giriş yap'))),
+                                ButtonSegment(value: true, label: Text(cfg.t('login.register', 'Kayıt ol')), enabled: cfg.registrationOpen),
                               ],
                               selected: {_register},
                               onSelectionChanged: (s) => setState(() {
@@ -164,7 +157,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               child: Center(
                                 child: _busy
                                     ? const SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                                    : Text(_register ? 'Hesap oluştur' : 'Giriş yap'),
+                                    : Text(_register ? 'Hesap oluştur' : cfg.t('login.title', 'Giriş yap')),
                               ),
                             ),
                             if (cfg.guestLogin) ...[
@@ -173,7 +166,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 filled: false,
                                 glow: false,
                                 onTap: _busy ? null : () => _run(c.guest),
-                                child: const Center(child: Text('Misafir olarak devam et')),
+                                child: Center(child: Text(cfg.t('login.guest', 'Misafir olarak devam et'))),
                               ),
                             ],
                           ],

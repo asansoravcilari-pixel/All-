@@ -207,4 +207,114 @@ void main() {
     await call('PUT', '/admin/api/v1/settings', token: admin, body: {'settings': {'maintenance': false}});
     await w.ws.close();
   });
+
+  test('DM: gönderme, okunmamış sayısı, çeviri ve bildirimler', () async {
+    // Sahte çeviri servisi (LibreTranslate biçimi)
+    final tr = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    tr.listen((req) async {
+      final b = jsonDecode(await utf8.decoder.bind(req).join()) as Map;
+      req.response.headers.contentType = ContentType.json;
+      req.response.write(jsonEncode({
+        'translatedText': '[${b['target']}] ${b['q']}',
+        'detectedLanguage': {'language': 'tr', 'confidence': 90}
+      }));
+      await req.response.close();
+    });
+    final (_, a) = await call('POST', '/admin/api/v1/login', body: {'username': 'patron', 'password': 'cok-gizli-123'});
+    final admin = a['token'] as String;
+    await call('PUT', '/admin/api/v1/settings', token: admin, body: {
+      'settings': {'translateEnabled': true, 'translateUrl': 'http://127.0.0.1:${tr.port}/translate'}
+    });
+
+    final (_, x) = await call('POST', '/api/v1/auth/register', body: {'username': 'deniz', 'password': 'sifre-aaaa'});
+    final (_, y) = await call('POST', '/api/v1/auth/register', body: {'username': 'lara', 'password': 'sifre-bbbb'});
+    final tx = x['token'] as String, ty = y['token'] as String;
+    final idy = (y['me'] as Map)['id'];
+    await call('PATCH', '/api/v1/me', token: ty, body: {'lang': 'en'});
+
+    final wy = await WsProbe.connect(ty);
+    await wy.next('hello');
+    final (ds, _) = await call('POST', '/api/v1/dm/$idy', token: tx, body: {'text': 'merhaba'});
+    expect(ds, 200);
+    final dm = await wy.next(Ev.dm);
+    expect(dm['text'], 'merhaba');
+    expect(dm['fromName'], 'deniz');
+    expect(dm['unreadDm'], 1);
+    expect(dm.containsKey('from'), isTrue);
+    final translated = await wy.next(Ev.dm, where: (d) => d['translations'] != null);
+    expect((translated['translations'] as Map)['en'], '[en] merhaba');
+
+    final (_, threads) = await call('GET', '/api/v1/dm', token: ty);
+    expect(threads['unread'], 1);
+    expect(((threads['items'] as List).single as Map)['peer']['name'], 'deniz');
+    await call('GET', '/api/v1/dm/${(x['me'] as Map)['id']}', token: ty); // okundu işaretler
+    final (_, me) = await call('GET', '/api/v1/me', token: ty);
+    expect(me['unreadDms'], 0);
+
+    // Bildirim: yönetici uyarısı
+    await call('POST', '/admin/api/v1/users/$idy/action', token: admin, body: {'action': 'warn', 'text': 'kurallara uy'});
+    final n = await wy.next(Ev.notify);
+    expect(n['unread'], 1);
+    final (_, list) = await call('GET', '/api/v1/notifications', token: ty);
+    expect(((list['items'] as List).first as Map)['text'], contains('kurallara uy'));
+    await call('POST', '/api/v1/notifications/read', token: ty);
+    final (_, me2) = await call('GET', '/api/v1/me', token: ty);
+    expect(me2['unreadNotices'], 0);
+
+    await call('PUT', '/admin/api/v1/settings', token: admin, body: {'settings': {'translateEnabled': false}});
+    await wy.ws.close();
+    await tr.close(force: true);
+  });
+
+  test('profil fotoğrafı yükleme: yalnız gerçek görsel kabul edilir ve sunulur', () async {
+    final (_, u) = await call('POST', '/api/v1/auth/register', body: {'username': 'foto', 'password': 'sifre-cccc'});
+    final t = u['token'] as String;
+    Future<(int, Map<String, dynamic>)> upload(List<int> bytes) async {
+      final c = HttpClient();
+      final req = await c.postUrl(Uri.parse('$base/api/v1/me/avatar'));
+      req.headers.set('Authorization', 'Bearer $t');
+      req.add(bytes);
+      final res = await req.close();
+      final text = await utf8.decoder.bind(res).join();
+      c.close();
+      return (res.statusCode, jsonDecode(text) as Map<String, dynamic>);
+    }
+
+    final (bad, _) = await upload(utf8.encode('<script>alert(1)</script>'));
+    expect(bad, 415);
+    // 1x1 PNG
+    final png = base64.decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
+    final (ok, me) = await upload(png);
+    expect(ok, 200);
+    final url = me['avatarUrl'] as String;
+    expect(url, startsWith('/uploads/'));
+    final c = HttpClient();
+    final res = await (await c.getUrl(Uri.parse('$base$url'))).close();
+    expect(res.statusCode, 200);
+    expect(res.headers.contentType?.mimeType, 'image/png');
+    await res.drain<void>();
+    c.close();
+  });
+
+  test('uç nokta yolu admin panelinden değiştirilebilir', () async {
+    final (_, a) = await call('POST', '/admin/api/v1/login', body: {'username': 'patron', 'password': 'cok-gizli-123'});
+    final admin = a['token'] as String;
+    final (bad, badBody) = await call('PUT', '/admin/api/v1/settings', token: admin, body: {
+      'settings': {'endpoints': {'roomList': '/admin/hack'}}
+    });
+    expect(bad, 200);
+    expect((badBody['settings']['endpoints'] as Map)['roomList'], '/room/api/v1/room');
+    await call('PUT', '/admin/api/v1/settings', token: admin, body: {
+      'settings': {'endpoints': {'roomList': '/oyun/v2/masalar'}}
+    });
+    final (_, cfg) = await call('GET', '/api/v1/config');
+    expect((cfg['endpoints'] as Map)['roomList'], '/oyun/v2/masalar');
+    final (_, u) = await call('POST', '/api/v1/auth/register', body: {'username': 'yolcu', 'password': 'sifre-dddd'});
+    final (st, rooms) = await call('GET', '/oyun/v2/masalar', token: u['token'] as String);
+    expect(st, 200);
+    expect((rooms['items'] as List), isNotEmpty);
+    await call('PUT', '/admin/api/v1/settings', token: admin, body: {'settings': {'endpoints': <String, String>{}}});
+    final (_, cfg2) = await call('GET', '/api/v1/config');
+    expect((cfg2['endpoints'] as Map)['roomList'], '/room/api/v1/room');
+  });
 }

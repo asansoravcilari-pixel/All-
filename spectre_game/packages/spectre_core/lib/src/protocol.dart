@@ -269,30 +269,54 @@ class RoundView {
 }
 
 class ChatLine {
-  ChatLine({this.userId, this.name = '', required this.text, this.system = false, this.color = 0xFFEFF8FF, DateTime? at})
-      : at = at ?? DateTime.now();
+  ChatLine({
+    this.id = '',
+    this.userId,
+    this.name = '',
+    required this.text,
+    this.system = false,
+    this.color = 0xFFEFF8FF,
+    this.avatarUrl = '',
+    Map<String, String>? translations,
+    DateTime? at,
+  })  : at = at ?? DateTime.now(),
+        translations = translations ?? {};
+  final String id;
   final String? userId;
   final String name;
   final String text;
   final bool system;
   final int color;
+  final String avatarUrl;
+
+  /// Sunucunun otomatik çevirileri: dil kodu -> metin.
+  final Map<String, String> translations;
   final DateTime at;
 
   Map<String, dynamic> toJson() => {
+        'id': id,
         'userId': userId,
         'name': name,
         'text': text,
         'system': system,
         'color': color,
+        'avatarUrl': avatarUrl,
+        if (translations.isNotEmpty) 'translations': translations,
         'at': at.millisecondsSinceEpoch,
       };
 
   factory ChatLine.fromJson(Map<String, dynamic> j) => ChatLine(
+        id: _str(j['id']),
         userId: j['userId'] as String?,
         name: _str(j['name']),
         text: _str(j['text']),
         system: _bool(j['system']),
         color: _int(j['color'], 0xFFEFF8FF),
+        avatarUrl: _str(j['avatarUrl']),
+        translations: {
+          for (final e in _map(j['translations']).entries)
+            if (e.value is String) e.key: e.value as String,
+        },
         at: DateTime.fromMillisecondsSinceEpoch(_int(j['at'])),
       );
 }
@@ -362,6 +386,9 @@ abstract final class Ev {
   static const me = 'me.updated';
   static const error = 'error';
   static const hello = 'hello';
+  static const chatTranslated = 'chat.translated';
+  static const dm = 'dm.message';
+  static const notify = 'notify';
 }
 
 /// İstemci işlem adları.

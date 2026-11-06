@@ -6,6 +6,7 @@ import '../data/api.dart';
 import '../data/client.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
+import 'social.dart';
 import 'stage_painters.dart';
 import 'table_screen.dart';
 
@@ -86,7 +87,7 @@ class LobbyScreen extends StatelessWidget {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
                     child: Row(children: [
-                      const Text('Masalar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                      Text(c.t('lobby.tables', 'Masalar'), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                       const SizedBox(width: 8),
                       Text('${rooms.fold(0, (a, r) => a + r.countInGamePlayers)} oyuncu',
                           style: const TextStyle(color: SpectreColors.muted)),
@@ -94,14 +95,13 @@ class LobbyScreen extends StatelessWidget {
                   ),
                 ),
                 if (rooms.isEmpty)
-                  const SliverToBoxAdapter(
+                  SliverToBoxAdapter(
                     child: Padding(
-                      padding: EdgeInsets.all(32),
+                      padding: const EdgeInsets.all(32),
                       child: Column(children: [
-                        Icon(Icons.table_restaurant_outlined, size: 48, color: SpectreColors.muted),
-                        SizedBox(height: 10),
-                        Text('Henüz açık masa yok', style: TextStyle(fontWeight: FontWeight.w700)),
-                        Text('Masalar yönetim merkezinden açılır.', style: TextStyle(color: SpectreColors.muted)),
+                        const Icon(Icons.table_restaurant_outlined, size: 48, color: SpectreColors.muted),
+                        const SizedBox(height: 10),
+                        Text(c.t('lobby.empty', 'Henüz açık masa yok'), style: const TextStyle(fontWeight: FontWeight.w700)),
                       ]),
                     ),
                   )
@@ -141,12 +141,7 @@ class _Header extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
       child: Row(
         children: [
-          ShaderMask(
-            shaderCallback: (r) =>
-                const LinearGradient(colors: [SpectreColors.cyan, SpectreColors.accent, Color(0xFF3A5BFF)]).createShader(r),
-            child: Text(cfg.brandName,
-                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 4, color: Colors.white)),
-          ),
+          BrandLogo(text: cfg.brandName),
           const SizedBox(width: 10),
           Expanded(
             child: Text(cfg.tagline,
@@ -228,13 +223,14 @@ class _HeroCard extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       child: Row(
         children: [
-          PlayerAvatar(player: me.asSeatPlayer(), size: 64, presence: Presence.online),
+          SquareAvatar(name: me.displayName, color: me.color, url: me.avatarUrl, size: 64, online: true),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Merhaba, ${me.displayName}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                Text('${client.t('lobby.hello', 'Merhaba')}, ${me.displayName}',
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 2),
                 Text('Seviye ${me.level} · ♥ ${me.hearts}${me.guest ? ' · Misafir' : ''}',
                     style: const TextStyle(color: SpectreColors.muted, fontSize: 13)),
@@ -242,10 +238,10 @@ class _HeroCard extends StatelessWidget {
                 Wrap(spacing: 10, runSpacing: 8, children: [
                   PressButton(
                     onTap: () => _quickPlay(context),
-                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(Icons.play_arrow_rounded),
-                      SizedBox(width: 6),
-                      Text('Hızlı oyna'),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      const Icon(Icons.play_arrow_rounded),
+                      const SizedBox(width: 6),
+                      Text(client.t('lobby.quickPlay', 'Hızlı oyna')),
                     ]),
                   ),
                   PressButton(
@@ -265,7 +261,7 @@ class _HeroCard extends StatelessWidget {
                             }
                           }
                         : null,
-                    child: Text(me.canClaimDaily ? '🎁 Günlük ödül' : '✓ Ödül alındı'),
+                    child: Text(me.canClaimDaily ? '🎁 ${client.t('lobby.daily', 'Günlük ödül')}' : '✓ Ödül alındı'),
                   ),
                 ]),
               ],
@@ -365,7 +361,7 @@ class _MarketScreenState extends State<MarketScreen> {
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.transparent,
-        title: const Text('Market', style: TextStyle(fontWeight: FontWeight.w800)),
+        title: Text(c.t('market.title', 'Market'), style: const TextStyle(fontWeight: FontWeight.w800)),
         actions: [Padding(padding: const EdgeInsets.only(right: 12), child: CoinPill(coins: c.me?.coins ?? 0))],
       ),
       extendBodyBehindAppBar: true,

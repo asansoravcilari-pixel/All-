@@ -26,6 +26,7 @@ class UserRec {
     this.avatarUrl = '',
     this.lastSeen,
     this.lastDaily,
+    this.lang = 'tr',
     List<String>? notes,
     List<String>? warnings,
   })  : notes = notes ?? [],
@@ -51,6 +52,7 @@ class UserRec {
   String avatarUrl;
   DateTime? lastSeen;
   DateTime? lastDaily;
+  String lang;
   final List<String> notes;
   final List<String> warnings;
 
@@ -77,6 +79,7 @@ class UserRec {
         'avatarUrl': avatarUrl,
         'lastSeen': lastSeen?.toIso8601String(),
         'lastDaily': lastDaily?.toIso8601String(),
+        'lang': lang,
         'notes': notes,
         'warnings': warnings,
       };
@@ -102,6 +105,7 @@ class UserRec {
         avatarUrl: j['avatarUrl'] as String? ?? '',
         lastSeen: j['lastSeen'] == null ? null : DateTime.tryParse(j['lastSeen'] as String),
         lastDaily: j['lastDaily'] == null ? null : DateTime.tryParse(j['lastDaily'] as String),
+        lang: j['lang'] as String? ?? 'tr',
         notes: (j['notes'] as List?)?.cast<String>(),
         warnings: (j['warnings'] as List?)?.cast<String>(),
       );
@@ -290,6 +294,142 @@ class LogRec {
       );
 }
 
+
+class NoticeRec {
+  NoticeRec({required this.id, required this.userId, required this.kind, required this.text, DateTime? at, this.read = false})
+      : at = at ?? DateTime.now();
+  final String id;
+  final String userId;
+  final String kind; // gift | match | order | admin | system
+  final String text;
+  final DateTime at;
+  bool read;
+
+  Map<String, dynamic> toJson() =>
+      {'id': id, 'userId': userId, 'kind': kind, 'text': text, 'at': at.toIso8601String(), 'read': read};
+  factory NoticeRec.fromJson(Map<String, dynamic> j) => NoticeRec(
+        id: j['id'] as String,
+        userId: j['userId'] as String,
+        kind: j['kind'] as String? ?? 'system',
+        text: j['text'] as String? ?? '',
+        at: DateTime.tryParse(j['at'] as String? ?? ''),
+        read: j['read'] as bool? ?? false,
+      );
+}
+
+class DmRec {
+  DmRec({required this.id, required this.from, required this.to, required this.text, DateTime? at, this.read = false, Map<String, String>? translations})
+      : at = at ?? DateTime.now(),
+        translations = translations ?? {};
+  final String id;
+  final String from;
+  final String to;
+  final String text;
+  final DateTime at;
+  bool read;
+  final Map<String, String> translations;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'from': from,
+        'to': to,
+        'text': text,
+        'at': at.toIso8601String(),
+        'read': read,
+        if (translations.isNotEmpty) 'translations': translations,
+      };
+  factory DmRec.fromJson(Map<String, dynamic> j) => DmRec(
+        id: j['id'] as String,
+        from: j['from'] as String,
+        to: j['to'] as String,
+        text: j['text'] as String? ?? '',
+        at: DateTime.tryParse(j['at'] as String? ?? ''),
+        read: j['read'] as bool? ?? false,
+        translations: (j['translations'] as Map?)?.cast<String, String>(),
+      );
+}
+
+/// Uygulamanın kullandığı uç nokta yolları (admin panelinden değiştirilebilir).
+/// `{param}` biçimindeki parçalar yol parametresidir.
+const Map<String, String> kDefaultEndpoints = {
+  'authRegister': '/api/v1/auth/register',
+  'authLogin': '/api/v1/auth/login',
+  'authGuest': '/api/v1/auth/guest',
+  'authLogout': '/api/v1/auth/logout',
+  'me': '/api/v1/me',
+  'meDaily': '/api/v1/me/daily',
+  'meAvatar': '/api/v1/me/avatar',
+  'roomList': '/room/api/v1/room',
+  'roomDetail': '/room/api/v1/room/{roomId}',
+  'roomPlayer': '/room/api/v1/roomPlayer',
+  'user': '/user/api/v1/user/{userId}',
+  'gifts': '/api/v1/gifts',
+  'packages': '/api/v1/market/packages',
+  'orders': '/api/v1/orders',
+  'dmThreads': '/api/v1/dm',
+  'dmThread': '/api/v1/dm/{userId}',
+  'notifications': '/api/v1/notifications',
+  'notificationsRead': '/api/v1/notifications/read',
+  'ws': '/ws',
+};
+
+/// Arayüz metinlerinin varsayılanları (admin panelinden değiştirilebilir).
+const Map<String, String> kDefaultTexts = {
+  'login.title': 'Giriş yap',
+  'login.register': 'Kayıt ol',
+  'login.guest': 'Misafir olarak devam et',
+  'lobby.hello': 'Merhaba',
+  'lobby.quickPlay': 'Hızlı oyna',
+  'lobby.daily': 'Günlük ödül',
+  'lobby.tables': 'Masalar',
+  'lobby.empty': 'Henüz açık masa yok',
+  'hud.round': 'Tur',
+  'hud.hearts': 'Kalp',
+  'hud.players': 'Oyuncu',
+  'tools.tables': 'Aktif masa seçimi',
+  'tools.bonus': 'Günlük bonus',
+  'tools.market': 'Market',
+  'tools.profile': 'Profil',
+  'tools.notifications': 'Bildirimler',
+  'tools.exit': 'Çıkış menüsü',
+  'table.sit': 'Otur',
+  'table.spin': 'ÇEVİR',
+  'table.accept': 'Kabul',
+  'table.reject': 'Pas',
+  'table.yourTurn': 'Sıra sende',
+  'table.waiting': 'İkinci oyuncu bekleniyor',
+  'table.empty': 'Masa boş',
+  'table.match': 'Eşleşme!',
+  'table.pass': 'Pas geçildi',
+  'chat.title': 'Masa Sohbeti',
+  'chat.placeholder': 'Mesaj yaz',
+  'chat.sitToWrite': 'Yazmak için masaya otur',
+  'composer.react': 'Tepki',
+  'composer.gift': 'Oyuncuya hediye',
+  'composer.groupGift': 'Toplu hediye',
+  'composer.messages': 'Mesaj kutusu',
+  'link.online': 'Canlı bağlantı',
+  'link.offline': 'Canlı oyun bağlantısı yok',
+  'dm.title': 'Mesaj kutusu',
+  'dm.empty': 'Henüz mesaj yok',
+  'notifications.title': 'Bildirimler',
+  'notifications.empty': 'Bildirim yok',
+  'market.title': 'Market',
+};
+
+/// Açılır pencerelerin üst/alt açıklama metinleri (admin panelinden).
+const Map<String, String> kDefaultPopups = {
+  'tables': 'Geçmek istediğin masayı seç.',
+  'bonus': 'Her gün bir kez bonus coin alabilirsin.',
+  'market': 'Paketler ödeme onaylandığında hesabına yüklenir.',
+  'gift': 'Hediye seç ve gönder.',
+  'groupGift': 'Seçtiğin hediye masadaki herkese gönderilir.',
+  'profile': '',
+  'exit': '',
+  'dm': '',
+  'notifications': '',
+};
+
 class Settings {
   bool maintenance = false;
   String maintenanceText = 'Kısa bir bakım yapıyoruz, birazdan döneceğiz.';
@@ -310,6 +450,26 @@ class Settings {
   String manualPaymentInfo = '';
   String brandName = 'SPECTRE';
   String tagline = 'Çevir · Tanış · Eşleş';
+  // Görünüm
+  String backgroundColor = '#050B14';
+  String backgroundImageUrl = '';
+  String logoUrl = '';
+  String accentColor = '#65C5FF';
+  Map<String, String> texts = {};
+  Map<String, String> popups = {};
+  // Bağlantı
+  String apiBase = '';
+  String wsUrl = '';
+  Map<String, String> endpoints = {};
+  // Otomatik çeviri (LibreTranslate uyumlu servis)
+  bool translateEnabled = false;
+  String translateUrl = '';
+  String translateApiKey = '';
+  List<String> languages = ['tr', 'en', 'de', 'ar', 'ru', 'az'];
+
+  Map<String, String> get effectiveEndpoints => {...kDefaultEndpoints, ...endpoints};
+  Map<String, String> get effectiveTexts => {...kDefaultTexts, ...texts};
+  Map<String, String> get effectivePopups => {...kDefaultPopups, ...popups};
 
   Map<String, dynamic> toJson() => {
         'maintenance': maintenance,
@@ -331,7 +491,23 @@ class Settings {
         'manualPaymentInfo': manualPaymentInfo,
         'brandName': brandName,
         'tagline': tagline,
+        'backgroundColor': backgroundColor,
+        'backgroundImageUrl': backgroundImageUrl,
+        'logoUrl': logoUrl,
+        'accentColor': accentColor,
+        'texts': effectiveTexts,
+        'popups': effectivePopups,
+        'apiBase': apiBase,
+        'wsUrl': wsUrl,
+        'endpoints': effectiveEndpoints,
+        'translateEnabled': translateEnabled,
+        'translateUrl': translateUrl,
+        // Anahtarın kendisi dışarı verilmez.
+        'translateApiKeySet': translateApiKey.isNotEmpty,
+        'languages': languages,
       };
+
+  Map<String, dynamic> toStorageJson() => {...toJson(), 'texts': texts, 'popups': popups, 'endpoints': endpoints, 'translateApiKey': translateApiKey};
 
   /// Yalnızca bilinen ve doğru türdeki alanları uygular.
   void apply(Map<String, dynamic> j) {
@@ -375,7 +551,67 @@ class Settings {
     final bn = s('brandName', 40);
     if (bn != null && bn.trim().isNotEmpty) brandName = bn.trim();
     tagline = s('tagline', 120) ?? tagline;
+
+    String? color(String k) {
+      final v = s(k, 9);
+      if (v == null) return null;
+      return RegExp(r'^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$').hasMatch(v) ? v.toUpperCase() : null;
+    }
+
+    String? url(String k) {
+      final v = s(k, 500);
+      if (v == null) return null;
+      if (v.isEmpty) return '';
+      return RegExp(r'^(https?://|wss?://|/)[^\s<>"]*$').hasMatch(v) ? v : null;
+    }
+
+    Map<String, String>? strMap(String k, int maxLen, {bool Function(String key, String value)? valid}) {
+      final v = j[k];
+      if (v is! Map) return null;
+      final out = <String, String>{};
+      for (final e in v.entries) {
+        if (e.key is! String || e.value is! String) continue;
+        final key = (e.key as String).trim();
+        var val = e.value as String;
+        if (key.isEmpty || key.length > 64) continue;
+        if (val.length > maxLen) val = val.substring(0, maxLen);
+        if (valid != null && !valid(key, val)) continue;
+        out[key] = val;
+      }
+      return out;
+    }
+
+    backgroundColor = color('backgroundColor') ?? backgroundColor;
+    accentColor = color('accentColor') ?? accentColor;
+    backgroundImageUrl = url('backgroundImageUrl') ?? backgroundImageUrl;
+    logoUrl = url('logoUrl') ?? logoUrl;
+    apiBase = url('apiBase') ?? apiBase;
+    wsUrl = url('wsUrl') ?? wsUrl;
+    translateUrl = url('translateUrl') ?? translateUrl;
+    translateEnabled = b('translateEnabled') ?? translateEnabled;
+    final key = s('translateApiKey', 200);
+    if (key != null) translateApiKey = key;
+    final langs = l('languages');
+    if (langs != null) {
+      languages = langs.where((e) => RegExp(r'^[a-z]{2,3}$').hasMatch(e)).take(30).toList();
+    }
+    texts = strMap('texts', 400) ?? texts;
+    popups = strMap('popups', 2000) ?? popups;
+    final eps = strMap('endpoints', 200, valid: (k, v) => kDefaultEndpoints.containsKey(k) && validEndpointPath(v));
+    if (eps != null) {
+      // Yalnız varsayılandan farklı olanlar saklanır; çakışan yollar reddedilir.
+      final merged = {...kDefaultEndpoints, ...eps};
+      if (merged.values.toSet().length == merged.length) {
+        endpoints = {for (final e in eps.entries) if (kDefaultEndpoints[e.key] != e.value) e.key: e.value};
+      }
+    }
   }
+
+  static bool validEndpointPath(String v) =>
+      RegExp(r'^/[A-Za-z0-9_\-./{}]{1,150}$').hasMatch(v) &&
+      !v.startsWith('/admin') &&
+      !v.startsWith('/uploads') &&
+      !v.contains('..');
 
   Map<String, dynamic> publicJson() => {
         'brandName': brandName,
@@ -392,6 +628,17 @@ class Settings {
           'manual': manualPayment,
           'manualInfo': manualPaymentInfo,
         },
+        'backgroundColor': backgroundColor,
+        'backgroundImageUrl': backgroundImageUrl,
+        'logoUrl': logoUrl,
+        'accentColor': accentColor,
+        'texts': effectiveTexts,
+        'popups': effectivePopups,
+        'apiBase': apiBase,
+        'wsUrl': wsUrl,
+        'endpoints': effectiveEndpoints,
+        'translate': translateEnabled && translateUrl.isNotEmpty,
+        'languages': languages,
       };
 }
 
@@ -408,6 +655,8 @@ class Store {
   final List<LedgerRec> ledger = [];
   final List<LogRec> audit = [];
   final List<LogRec> security = [];
+  final List<NoticeRec> notices = [];
+  final List<DmRec> dms = [];
   final Settings settings = Settings();
   Map<String, dynamic> rules = {};
   int seq = 1000;
@@ -438,6 +687,17 @@ class Store {
     markDirty();
   }
 
+  NoticeRec addNotice(String userId, String kind, String text) {
+    final n = NoticeRec(id: nextId('n'), userId: userId, kind: kind, text: text);
+    notices.add(n);
+    if (notices.length > 20000) notices.removeAt(0);
+    markDirty();
+    return n;
+  }
+
+  int unreadNotices(String userId) => notices.where((n) => n.userId == userId && !n.read).length;
+  int unreadDms(String userId) => dms.where((d) => d.to == userId && !d.read).length;
+
   void addLedger(LedgerRec e) {
     ledger.add(e);
     if (ledger.length > 50000) ledger.removeAt(0);
@@ -464,6 +724,8 @@ class Store {
     ledger.addAll(list('ledger').map(LedgerRec.fromJson));
     audit.addAll(list('audit').map(LogRec.fromJson));
     security.addAll(list('security').map(LogRec.fromJson));
+    notices.addAll(list('notices').map(NoticeRec.fromJson));
+    dms.addAll(list('dms').map(DmRec.fromJson));
     settings.apply((j['settings'] as Map?)?.cast<String, dynamic>() ?? const {});
     rules = (j['rules'] as Map?)?.cast<String, dynamic>() ?? {};
     seq = j['seq'] as int? ?? seq;
@@ -472,7 +734,7 @@ class Store {
   Map<String, dynamic> toJson() => {
         'version': 2,
         'seq': seq,
-        'settings': settings.toJson(),
+        'settings': settings.toStorageJson(),
         'rules': rules,
         'users': [for (final u in users.values) u.toJson()],
         'admins': [for (final a in admins.values) a.toJson()],
@@ -483,6 +745,8 @@ class Store {
         'ledger': [for (final e in ledger) e.toJson()],
         'audit': [for (final e in audit) e.toJson()],
         'security': [for (final e in security) e.toJson()],
+        'notices': [for (final e in notices) e.toJson()],
+        'dms': [for (final e in dms) e.toJson()],
       };
 
   /// Değişiklik varsa dosyaya atomik olarak yazar.

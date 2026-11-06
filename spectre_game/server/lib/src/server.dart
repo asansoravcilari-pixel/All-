@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:spectre_core/spectre_core.dart';
 
@@ -178,6 +179,16 @@ class SpectreServer {
         _toChannel(ch, Ev.seatVacated, {'index': index, 'playerId': userId});
       case ChatEvent(:final line):
         _toChannel(ch, Ev.chat, line.toJson());
+        if (!line.system && store.settings.translateEnabled) {
+          final langs = {
+            for (final p in t.players) store.users[p.userId]?.lang ?? 'tr',
+          };
+          _translateFor(line.text, langs).then((tr) {
+            if (tr.isEmpty) return;
+            t.addTranslations(line.id, tr);
+            _toChannel(ch, Ev.chatTranslated, {'id': line.id, 'translations': tr});
+          });
+        }
       case GiftEvent(:final fromSeat, :final toSeat, :final gift):
         _toChannel(ch, Ev.gift, {'fromSeat': fromSeat, 'toSeat': toSeat, 'gift': gift.toJson()});
       case ReactionEvent(:final seat, :final emoji):
@@ -189,6 +200,8 @@ class SpectreServer {
             if (u != null) {
               u.hearts++;
               store.markDirty();
+              final other = t.seats[idx == a ? b : a].player?.name ?? '';
+              _notify(u.id, 'match', '$other ile eşleştin! +1 ♥');
             }
           }
         }
@@ -250,11 +263,14 @@ class SpectreServer {
         return;
       }
       final path = req.uri.path;
-      if (path == '/ws') return await _upgrade(req);
+      final eps = store.settings.effectiveEndpoints;
+      if (path == eps['ws'] || path == '/ws') return await _upgrade(req);
       if (path.startsWith('/admin/api/')) return await _json(req, await _admin(req));
-      if (path.startsWith('/api/') || path.startsWith('/room/api/') || path.startsWith('/user/api/')) {
-        return await _json(req, await _public(req));
-      }
+      if (path.startsWith('/uploads/')) return await _upload(req);
+      if (path == '/api/v1/config' || path == '/api/v1/health') return await _json(req, await _public(req, path, const {}));
+      final route = _match(path, eps);
+      if (route != null) return await _json(req, await _public(req, route.$1, route.$2));
+      if (path.startsWith('/api/')) throw ApiError(404, 'Bulunamadı');
       await _static(req);
     } on ApiError catch (e) {
       await _json(req, {'error': e.message}, status: e.status);
@@ -353,7 +369,10 @@ class SpectreServer {
         'color': u.color,
         'guest': u.guest,
         'avatarUrl': u.avatarUrl,
+        'lang': u.lang,
         'canClaimDaily': _canClaimDaily(u),
+        'unreadNotices': store.unreadNotices(u.id),
+        'unreadDms': store.unreadDms(u.id),
       };
 
   Map<String, dynamic> publicUser(UserRec u) => {
@@ -397,168 +416,360 @@ class SpectreServer {
     return u;
   }
 
-  Future<Object?> _public(HttpRequest req) async {
-    final p = req.uri.pathSegments;
+  /// İstek yolunu uç nokta haritasıyla eşleştirir: (anahtar, yol parametreleri).
+  (String, Map<String, String>)? _match(String path, Map<String, String> eps) {
+    final segs = path.split('/').where((e) => e.isNotEmpty).toList();
+    for (final e in eps.entries) {
+      if (e.key == 'ws') continue;
+      final t = e.value.split('/').where((x) => x.isNotEmpty).toList();
+      if (t.length != segs.length) continue;
+      final params = <String, String>{};
+      var ok = true;
+      for (var i = 0; i < t.length; i++) {
+        if (t[i].startsWith('{') && t[i].endsWith('}')) {
+          params[t[i].substring(1, t[i].length - 1)] = Uri.decodeComponent(segs[i]);
+        } else if (t[i] != segs[i]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) return (e.key, params);
+    }
+    return null;
+  }
+
+  Directory get uploadsDir {
+    final f = store.file;
+    final d = f == null
+        ? Directory('${Directory.systemTemp.path}/spectre-uploads-$hashCode')
+        : Directory('${f.parent.path}/uploads');
+    if (!d.existsSync()) d.createSync(recursive: true);
+    return d;
+  }
+
+  static const _imageTypes = {'png': 'image/png', 'jpg': 'image/jpeg', 'webp': 'image/webp', 'gif': 'image/gif'};
+
+  /// Gövdedeki görseli doğrulayıp kaydeder; `/uploads/<ad>` döner.
+  Future<String> _saveImage(HttpRequest req, {int maxBytes = 2 * 1024 * 1024}) async {
+    final builder = BytesBuilder(copy: false);
+    await for (final chunk in req) {
+      builder.add(chunk);
+      if (builder.length > maxBytes) throw ApiError(413, 'Dosya çok büyük (en fazla ${maxBytes ~/ 1024 ~/ 1024} MB)');
+    }
+    final b = builder.takeBytes();
+    String? ext;
+    if (b.length > 8 && b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) ext = 'png';
+    if (b.length > 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) ext = 'jpg';
+    if (b.length > 12 && String.fromCharCodes(b.sublist(0, 4)) == 'RIFF' && String.fromCharCodes(b.sublist(8, 12)) == 'WEBP') {
+      ext = 'webp';
+    }
+    if (b.length > 6 && String.fromCharCodes(b.sublist(0, 3)) == 'GIF') ext = 'gif';
+    if (ext == null) throw ApiError(415, 'Yalnız PNG, JPG, WEBP veya GIF yüklenebilir');
+    final name = '${randomToken(12).replaceAll(RegExp(r'[^A-Za-z0-9]'), 'x')}.$ext';
+    await File('${uploadsDir.path}/$name').writeAsBytes(b, flush: true);
+    return '/uploads/$name';
+  }
+
+  Future<void> _upload(HttpRequest req) async {
+    final name = req.uri.pathSegments.length == 2 ? req.uri.pathSegments[1] : '';
+    final m = RegExp(r'^[A-Za-z0-9]+\.(png|jpg|webp|gif)$').firstMatch(name);
+    if (m == null || req.method != 'GET') throw ApiError(404, 'Bulunamadı');
+    final f = File('${uploadsDir.path}/$name');
+    if (!await f.exists()) throw ApiError(404, 'Bulunamadı');
+    final res = req.response;
+    res.headers
+      ..set(HttpHeaders.contentTypeHeader, _imageTypes[m.group(1)]!)
+      ..set('Cache-Control', 'public, max-age=604800')
+      ..set('Cross-Origin-Resource-Policy', 'same-origin');
+    await res.addStream(f.openRead());
+    await res.close();
+  }
+
+  /// Bildirim oluşturur ve kullanıcıya okunmamış sayısıyla iletir.
+  void _notify(String userId, String kind, String text) {
+    final n = store.addNotice(userId, kind, text);
+    _toUser(userId, Ev.notify, {'notice': n.toJson(), 'unread': store.unreadNotices(userId), 'unreadDm': store.unreadDms(userId)});
+  }
+
+  /// LibreTranslate uyumlu servis ile çeviri. Hata olursa null.
+  Future<String?> _translate(String text, String target) async {
+    final s = store.settings;
+    if (!s.translateEnabled || s.translateUrl.isEmpty || text.trim().isEmpty) return null;
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    try {
+      final req = await client.postUrl(Uri.parse(s.translateUrl));
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({
+        'q': text,
+        'source': 'auto',
+        'target': target,
+        'format': 'text',
+        if (s.translateApiKey.isNotEmpty) 'api_key': s.translateApiKey,
+      }));
+      final res = await req.close().timeout(const Duration(seconds: 8));
+      final body = await utf8.decoder.bind(res).join();
+      if (res.statusCode != 200) return null;
+      final j = jsonDecode(body);
+      if (j is! Map) return null;
+      final out = j['translatedText'];
+      final detected = (j['detectedLanguage'] is Map) ? (j['detectedLanguage'] as Map)['language'] : null;
+      if (out is! String || out.trim().isEmpty || detected == target || out.trim() == text.trim()) return null;
+      return out;
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<Map<String, String>> _translateFor(String text, Iterable<String> langs) async {
+    final out = <String, String>{};
+    for (final l in langs.toSet()) {
+      final t = await _translate(text, l);
+      if (t != null) out[l] = t;
+    }
+    return out;
+  }
+
+  Map<String, dynamic> _dmJson(DmRec d) {
+    final from = store.users[d.from];
+    return {...d.toJson(), 'fromName': from?.displayName ?? '?', 'fromAvatar': from?.avatarUrl ?? '', 'fromColor': from?.color ?? 0};
+  }
+
+  Future<Object?> _public(HttpRequest req, String key, Map<String, String> params) async {
     final m = req.method;
     final s = store.settings;
     final ip = _ip(req);
 
-    // --- Genel ---
-    if (m == 'GET' && req.uri.path == '/api/v1/health') return {'ok': true};
-    if (m == 'GET' && req.uri.path == '/api/v1/config') return s.publicJson();
+    switch (key) {
+      case '/api/v1/health':
+        return {'ok': true};
+      case '/api/v1/config':
+        return s.publicJson();
 
-    // --- Kimlik ---
-    if (m == 'POST' && req.uri.path == '/api/v1/auth/register') {
-      if (!s.registrationOpen) throw ApiError(403, 'Yeni kayıt şu an kapalı');
-      final b = await _body(req);
-      final username = '${b['username'] ?? ''}'.trim();
-      final password = '${b['password'] ?? ''}';
-      final display = '${b['displayName'] ?? username}'.trim();
-      if (!usernamePattern.hasMatch(username)) {
-        throw ApiError(400, 'Kullanıcı adı 3–20 karakter olmalı (harf, rakam, . _ -)');
-      }
-      final pe = validatePassword(password);
-      if (pe != null) throw ApiError(400, pe);
-      if (store.userByName(username) != null) throw ApiError(409, 'Bu kullanıcı adı alınmış');
-      final u = _createUser(username, display.isEmpty ? username : _clip(display, 20), password);
-      return {'token': _issue(u.id, admin: false), 'me': meJson(u)};
-    }
-    if (m == 'POST' && req.uri.path == '/api/v1/auth/login') {
-      final b = await _body(req);
-      final username = '${b['username'] ?? ''}'.trim();
-      final key = 'u:$ip';
-      _throttleLogin(key);
-      final u = store.userByName(username);
-      if (u == null || u.passwordHash.isEmpty || !verifyPassword('${b['password'] ?? ''}', u.passwordHash)) {
-        _loginFailed(key, 'oyuncu "$username" ($ip)');
-        throw ApiError(401, 'Kullanıcı adı veya şifre hatalı');
-      }
-      if (u.status == 'banned') throw ApiError(403, 'Hesabınız yasaklanmıştır');
-      if (u.status == 'suspended') throw ApiError(403, 'Hesabınız askıya alınmıştır');
-      u.lastSeen = DateTime.now();
-      return {'token': _issue(u.id, admin: false), 'me': meJson(u)};
-    }
-    if (m == 'POST' && req.uri.path == '/api/v1/auth/guest') {
-      if (!s.guestLogin) throw ApiError(403, 'Misafir girişi kapalı');
-      final n = 1000 + _rnd.nextInt(9000);
-      final u = _createUser('misafir_${store.seq + 1}', 'Misafir $n', '', guest: true);
-      return {'token': _issue(u.id, admin: false), 'me': meJson(u)};
-    }
-    if (m == 'POST' && req.uri.path == '/api/v1/auth/logout') {
-      final t = _bearer(req);
-      if (t != null) _sessions.remove(t);
-      return {'ok': true};
-    }
-
-    // --- Oda (sizin verdiğiniz sözleşme) ---
-    if (m == 'GET' && p.length == 4 && p[0] == 'room' && p[3] == 'room') {
-      _requireUser(req);
-      return {
-        'items': [
-          for (final t in tables.values)
-            if (!t.closed) t.summary().toJson()
-        ]
-      };
-    }
-    if (m == 'GET' && p.length == 5 && p[0] == 'room' && p[3] == 'room') {
-      _requireUser(req);
-      final t = tables[p[4]] ?? (throw ApiError(404, 'Masa bulunamadı'));
-      return t.summary().toJson();
-    }
-    if (m == 'GET' && p.length == 4 && p[0] == 'room' && p[3] == 'roomPlayer') {
-      final me = _requireUser(req);
-      final q = req.uri.queryParameters;
-      final t = tables[q['roomId']] ?? tableOf(q['userId'] ?? me.id);
-      if (t == null) return {'items': []};
-      final limit = int.tryParse(q['limit'] ?? '') ?? kSeatCount;
-      final items = t.roomPlayers().take(limit.clamp(1, kSeatCount)).map((e) => e.toJson()).toList();
-      if (q['status'] != 'active') {
-        // Son 30 dakikada ayrılanlar (leaveAt dolu)
-        for (final e in t.leftAt.entries) {
-          if (DateTime.now().difference(e.value).inMinutes > 30) continue;
-          final u = store.users[e.key];
-          if (u == null) continue;
-          items.add(RoomPlayer(index: -1, player: _seatPlayer(u), isPlaying: false, leaveAt: e.value).toJson());
+      // --- Kimlik ---
+      case 'authRegister' when m == 'POST':
+        if (!s.registrationOpen) throw ApiError(403, 'Yeni kayıt şu an kapalı');
+        final b = await _body(req);
+        final username = '${b['username'] ?? ''}'.trim();
+        final password = '${b['password'] ?? ''}';
+        final display = '${b['displayName'] ?? username}'.trim();
+        if (!usernamePattern.hasMatch(username)) {
+          throw ApiError(400, 'Kullanıcı adı 3–20 karakter olmalı (harf, rakam, . _ -)');
         }
-      }
-      return {'roomId': t.id, 'items': items};
-    }
-    if (m == 'GET' && p.length == 5 && p[0] == 'user' && p[3] == 'user') {
-      _requireUser(req);
-      final u = store.users[p[4]] ?? (throw ApiError(404, 'Oyuncu bulunamadı'));
-      return publicUser(u);
-    }
-
-    // --- Hesap ---
-    if (req.uri.path == '/api/v1/me') {
-      final u = _requireUser(req);
-      if (m == 'GET') return meJson(u);
-      if (m == 'PATCH') {
+        final pe = validatePassword(password);
+        if (pe != null) throw ApiError(400, pe);
+        if (store.userByName(username) != null) throw ApiError(409, 'Bu kullanıcı adı alınmış');
+        final u = _createUser(username, display.isEmpty ? username : _clip(display, 20), password);
+        return {'token': _issue(u.id, admin: false), 'me': meJson(u)};
+      case 'authLogin' when m == 'POST':
         final b = await _body(req);
-        final d = '${b['displayName'] ?? ''}'.trim();
-        if (d.length < 2) throw ApiError(400, 'Ad en az 2 karakter olmalı');
-        if (_blocked(d)) throw ApiError(400, 'Bu ad kullanılamaz');
-        u.displayName = _clip(d, 20);
-        store.markDirty();
-        return meJson(u);
-      }
-    }
-    if (m == 'POST' && req.uri.path == '/api/v1/me/daily') {
-      final u = _requireUser(req);
-      if (!_canClaimDaily(u)) throw ApiError(409, 'Günlük ödül zaten alındı');
-      u.lastDaily = DateTime.now();
-      u.coins += s.dailyRewardCoins;
-      store.addLedger(LedgerRec(u.id, 'reward', s.dailyRewardCoins, 'Günlük ödül'));
-      return {'amount': s.dailyRewardCoins, 'me': meJson(u)};
-    }
+        final username = '${b['username'] ?? ''}'.trim();
+        final key = 'u:$ip';
+        _throttleLogin(key);
+        final u = store.userByName(username);
+        if (u == null || u.passwordHash.isEmpty || !verifyPassword('${b['password'] ?? ''}', u.passwordHash)) {
+          _loginFailed(key, 'oyuncu "$username" ($ip)');
+          throw ApiError(401, 'Kullanıcı adı veya şifre hatalı');
+        }
+        if (u.status == 'banned') throw ApiError(403, 'Hesabınız yasaklanmıştır');
+        if (u.status == 'suspended') throw ApiError(403, 'Hesabınız askıya alınmıştır');
+        u.lastSeen = DateTime.now();
+        return {'token': _issue(u.id, admin: false), 'me': meJson(u)};
+      case 'authGuest' when m == 'POST':
+        if (!s.guestLogin) throw ApiError(403, 'Misafir girişi kapalı');
+        final n = 1000 + _rnd.nextInt(9000);
+        final u = _createUser('misafir_${store.seq + 1}', 'Misafir $n', '', guest: true);
+        return {'token': _issue(u.id, admin: false), 'me': meJson(u)};
+      case 'authLogout' when m == 'POST':
+        final t = _bearer(req);
+        if (t != null) _sessions.remove(t);
+        return {'ok': true};
 
-    // --- Market ---
-    if (m == 'GET' && req.uri.path == '/api/v1/gifts') {
-      _requireUser(req);
-      return {'items': store.gifts.where((g) => g['enabled'] != false).toList()};
-    }
-    if (m == 'GET' && req.uri.path == '/api/v1/market/packages') {
-      _requireUser(req);
-      if (!s.marketOpen) return {'items': [], 'open': false};
-      return {'items': [for (final p in store.packages) if (p.active) p.toJson()], 'open': true};
-    }
-    if (req.uri.path == '/api/v1/orders') {
-      final u = _requireUser(req);
-      if (m == 'GET') {
-        return {'items': [for (final o in store.orders) if (o.userId == u.id) o.toJson()]};
-      }
-      if (m == 'POST') {
-        if (!s.marketOpen) throw ApiError(403, 'Market kapalı');
-        if (u.guest) throw ApiError(403, 'Satın alma için üye girişi gerekli');
-        final b = await _body(req);
-        final pkg = store.packages.where((x) => x.id == b['packageId'] && x.active).firstOrNull ??
-            (throw ApiError(404, 'Paket bulunamadı'));
-        final provider = '${b['provider']}';
-        final allowed = {
-          if (s.paytrEnabled) 'paytr',
-          if (s.shopierEnabled) 'shopier',
-          if (s.manualPayment) 'manual',
-        };
-        if (!allowed.contains(provider)) throw ApiError(400, 'Bu ödeme yöntemi kapalı');
-        final o = OrderRec(
-          id: store.nextId('S'),
-          userId: u.id,
-          packageId: pkg.id,
-          packageName: pkg.name,
-          amountKurus: pkg.priceKurus,
-          coins: pkg.totalCoins,
-          provider: provider,
-          createdAt: DateTime.now(),
-        );
-        store.orders.insert(0, o);
-        store.markDirty();
+      // --- Masa ve koltuk durumu ---
+      case 'roomList' when m == 'GET':
+        _requireUser(req);
         return {
-          'order': o.toJson(),
-          // Kartlı ödeme sağlayıcı entegrasyonu henüz yok: sipariş yönetici onayına düşer.
-          'next': provider == 'manual' ? 'manual' : 'pending_provider',
-          'manualInfo': s.manualPaymentInfo,
+          'items': [
+            for (final t in tables.values)
+              if (!t.closed) t.summary().toJson()
+          ]
         };
-      }
+      case 'roomDetail' when m == 'GET':
+        _requireUser(req);
+        final t = tables[params['roomId']] ?? (throw ApiError(404, 'Masa bulunamadı'));
+        return t.summary().toJson();
+      case 'roomPlayer' when m == 'GET':
+        final me = _requireUser(req);
+        final q = req.uri.queryParameters;
+        final t = tables[q['roomId']] ?? tableOf(q['userId'] ?? me.id);
+        if (t == null) return {'items': []};
+        final limit = int.tryParse(q['limit'] ?? '') ?? kSeatCount;
+        final items = t.roomPlayers().take(limit.clamp(1, kSeatCount)).map((e) => e.toJson()).toList();
+        if (q['status'] != 'active') {
+          for (final e in t.leftAt.entries) {
+            if (DateTime.now().difference(e.value).inMinutes > 30) continue;
+            final u = store.users[e.key];
+            if (u == null) continue;
+            items.add(RoomPlayer(index: -1, player: _seatPlayer(u), isPlaying: false, leaveAt: e.value).toJson());
+          }
+        }
+        return {'roomId': t.id, 'items': items};
+      case 'user' when m == 'GET':
+        _requireUser(req);
+        final u = store.users[params['userId']] ?? (throw ApiError(404, 'Oyuncu bulunamadı'));
+        return publicUser(u);
+
+      // --- Hesap ---
+      case 'me':
+        final u = _requireUser(req);
+        if (m == 'GET') return meJson(u);
+        if (m == 'PATCH') {
+          final b = await _body(req);
+          if (b['displayName'] != null) {
+            final d = '${b['displayName']}'.trim();
+            if (d.length < 2) throw ApiError(400, 'Ad en az 2 karakter olmalı');
+            if (_blocked(d)) throw ApiError(400, 'Bu ad kullanılamaz');
+            u.displayName = _clip(d, 20);
+          }
+          if (b['lang'] is String && s.languages.contains(b['lang'])) u.lang = b['lang'] as String;
+          store.markDirty();
+          tableOf(u.id)?.updatePlayer(_seatPlayer(u));
+          return meJson(u);
+        }
+      case 'meAvatar' when m == 'POST':
+        final u = _requireUser(req);
+        if (u.guest) throw ApiError(403, 'Fotoğraf için üye girişi gerekli');
+        u.avatarUrl = await _saveImage(req, maxBytes: 1536 * 1024);
+        store.markDirty();
+        tableOf(u.id)?.updatePlayer(_seatPlayer(u));
+        return meJson(u);
+      case 'meDaily' when m == 'POST':
+        final u = _requireUser(req);
+        if (!_canClaimDaily(u)) throw ApiError(409, 'Günlük ödül zaten alındı');
+        u.lastDaily = DateTime.now();
+        u.coins += s.dailyRewardCoins;
+        store.addLedger(LedgerRec(u.id, 'reward', s.dailyRewardCoins, 'Günlük ödül'));
+        return {'amount': s.dailyRewardCoins, 'me': meJson(u)};
+
+      // --- Bildirimler ---
+      case 'notifications' when m == 'GET':
+        final u = _requireUser(req);
+        final list = store.notices.reversed.where((n) => n.userId == u.id).take(100).map((n) => n.toJson()).toList();
+        return {'unread': store.unreadNotices(u.id), 'items': list};
+      case 'notificationsRead' when m == 'POST':
+        final u = _requireUser(req);
+        for (final n in store.notices.where((n) => n.userId == u.id && !n.read)) {
+          n.read = true;
+        }
+        store.markDirty();
+        return {'unread': 0};
+
+      // --- Özel mesajlar ---
+      case 'dmThreads' when m == 'GET':
+        final u = _requireUser(req);
+        final last = <String, DmRec>{};
+        final unread = <String, int>{};
+        for (final d in store.dms) {
+          if (d.from != u.id && d.to != u.id) continue;
+          final peer = d.from == u.id ? d.to : d.from;
+          last[peer] = d;
+          if (d.to == u.id && !d.read) unread[peer] = (unread[peer] ?? 0) + 1;
+        }
+        final items = last.entries.toList()..sort((a, b) => b.value.at.compareTo(a.value.at));
+        return {
+          'unread': store.unreadDms(u.id),
+          'items': [
+            for (final e in items)
+              if (store.users[e.key] != null)
+                {'peer': publicUser(store.users[e.key]!), 'last': _dmJson(e.value), 'unread': unread[e.key] ?? 0}
+          ],
+        };
+      case 'dmThread':
+        final u = _requireUser(req);
+        final peer = store.users[params['userId']] ?? (throw ApiError(404, 'Oyuncu bulunamadı'));
+        if (peer.id == u.id) throw ApiError(400, 'Kendine mesaj gönderemezsin');
+        if (m == 'GET') {
+          var changed = false;
+          final list = <Map<String, dynamic>>[];
+          for (final d in store.dms) {
+            if (!((d.from == u.id && d.to == peer.id) || (d.from == peer.id && d.to == u.id))) continue;
+            if (d.to == u.id && !d.read) {
+              d.read = true;
+              changed = true;
+            }
+            list.add(_dmJson(d));
+          }
+          if (changed) store.markDirty();
+          return {'peer': publicUser(peer), 'items': list.length > 200 ? list.sublist(list.length - 200) : list};
+        }
+        if (m == 'POST') {
+          if (u.status == 'muted') throw ApiError(403, 'Susturuldunuz');
+          final b = await _body(req);
+          final text = _clip('${b['text'] ?? ''}'.trim(), 500);
+          if (text.isEmpty) throw ApiError(400, 'Mesaj boş');
+          if (_blocked(text)) throw ApiError(400, 'Mesaj topluluk kurallarına uymuyor');
+          final d = DmRec(id: store.nextId('d'), from: u.id, to: peer.id, text: text);
+          store.dms.add(d);
+          if (store.dms.length > 100000) store.dms.removeAt(0);
+          store.markDirty();
+          final j = _dmJson(d);
+          _toUser(peer.id, Ev.dm, {...j, 'unreadDm': store.unreadDms(peer.id)});
+          _toUser(u.id, Ev.dm, j);
+          // Alıcının diline otomatik çeviri (arka planda)
+          if (peer.lang != u.lang) {
+            _translateFor(text, [peer.lang]).then((t) {
+              if (t.isEmpty) return;
+              d.translations.addAll(t);
+              store.markDirty();
+              final upd = _dmJson(d);
+              _toUser(peer.id, Ev.dm, {...upd, 'unreadDm': store.unreadDms(peer.id)});
+              _toUser(u.id, Ev.dm, upd);
+            });
+          }
+          return j;
+        }
+
+      // --- Market ---
+      case 'gifts' when m == 'GET':
+        _requireUser(req);
+        return {'items': store.gifts.where((g) => g['enabled'] != false).toList()};
+      case 'packages' when m == 'GET':
+        _requireUser(req);
+        if (!s.marketOpen) return {'items': [], 'open': false};
+        return {'items': [for (final p in store.packages) if (p.active) p.toJson()], 'open': true};
+      case 'orders':
+        final u = _requireUser(req);
+        if (m == 'GET') {
+          return {'items': [for (final o in store.orders) if (o.userId == u.id) o.toJson()]};
+        }
+        if (m == 'POST') {
+          if (!s.marketOpen) throw ApiError(403, 'Market kapalı');
+          if (u.guest) throw ApiError(403, 'Satın alma için üye girişi gerekli');
+          final b = await _body(req);
+          final pkg = store.packages.where((x) => x.id == b['packageId'] && x.active).firstOrNull ??
+              (throw ApiError(404, 'Paket bulunamadı'));
+          final provider = '${b['provider']}';
+          final allowed = {
+            if (s.paytrEnabled) 'paytr',
+            if (s.shopierEnabled) 'shopier',
+            if (s.manualPayment) 'manual',
+          };
+          if (!allowed.contains(provider)) throw ApiError(400, 'Bu ödeme yöntemi kapalı');
+          final o = OrderRec(
+            id: store.nextId('S'),
+            userId: u.id,
+            packageId: pkg.id,
+            packageName: pkg.name,
+            amountKurus: pkg.priceKurus,
+            coins: pkg.totalCoins,
+            provider: provider,
+            createdAt: DateTime.now(),
+          );
+          store.orders.insert(0, o);
+          store.markDirty();
+          return {'order': o.toJson(), 'next': provider == 'manual' ? 'manual' : 'pending_provider', 'manualInfo': s.manualPaymentInfo};
+        }
     }
     throw ApiError(404, 'Bulunamadı');
   }
@@ -694,6 +905,7 @@ class SpectreServer {
         store.addLedger(LedgerRec(rec.id, 'giftIncome', share, '${gift.name} ← ${u.displayName}'));
       }
       _toUser(rec.id, Ev.me, meJson(rec));
+      _notify(rec.id, 'gift', '${u.displayName} sana ${gift.emoji} ${gift.name} gönderdi');
     }
     _toUser(u.id, Ev.me, meJson(u));
   }
@@ -727,6 +939,7 @@ class SpectreServer {
           store.addLedger(LedgerRec(rec.id, 'giftIncome', share, '${gift.name} ← ${u.displayName}'));
         }
         _toUser(rec.id, Ev.me, meJson(rec));
+        _notify(rec.id, 'gift', '${u.displayName} masaya ${gift.emoji} ${gift.name} dağıttı');
       }
     }
     store.addLedger(LedgerRec(u.id, 'gift', -total, 'Toplu ${gift.name} × ${targets.length}'));
@@ -815,6 +1028,7 @@ class SpectreServer {
           if ((pkg?.vipDays ?? 0) > 0 && u.role == 'player') u.role = 'vip';
           store.addLedger(LedgerRec(u.id, 'purchase', o.coins, '${o.packageName} (${o.id})'));
           _toUser(u.id, Ev.me, meJson(u));
+          _notify(u.id, 'order', 'Siparişin onaylandı: ${o.packageName} (+${o.coins} 🪙)');
         }
       case 'refund':
         if (o.status != 'paid') throw ApiError(409, 'Yalnız ödenmiş sipariş iade edilir');
@@ -825,6 +1039,7 @@ class SpectreServer {
           u.totalSpent -= o.amountKurus;
           store.addLedger(LedgerRec(u.id, 'refund', -take, 'İade ${o.id}'));
           _toUser(u.id, Ev.me, meJson(u));
+          _notify(u.id, 'order', 'Siparişin iade edildi: ${o.packageName}');
         }
       case 'cancel':
         if (o.status != 'pending') throw ApiError(409, 'Yalnız bekleyen sipariş iptal edilir');
@@ -866,6 +1081,11 @@ class SpectreServer {
       return {'ok': true};
     }
     if (m == 'GET' && path == '/me') return {'username': admin.username, 'role': admin.role};
+    if (m == 'POST' && path == '/upload') {
+      final url = await _saveImage(req, maxBytes: 4 * 1024 * 1024);
+      store.log(actor, 'Görsel yüklendi', url);
+      return {'url': url};
+    }
     if (m == 'POST' && path == '/password') {
       final b = await _body(req);
       if (!verifyPassword('${b['current'] ?? ''}', admin.passwordHash)) throw ApiError(400, 'Mevcut şifre hatalı');
@@ -1000,7 +1220,7 @@ class SpectreServer {
           final w = _clip('${b['text'] ?? ''}'.trim(), 300);
           if (w.isEmpty) throw ApiError(400, 'Metin boş');
           u.warnings.add(w);
-          _toUser(u.id, Ev.error, {'message': 'Yönetici uyarısı: $w'});
+          _notify(u.id, 'admin', 'Yönetici uyarısı: $w');
           store.log(actor, 'Uyarı: $w', u.username);
         case 'note':
           final w = _clip('${b['text'] ?? ''}'.trim(), 500);
@@ -1015,6 +1235,7 @@ class SpectreServer {
           final d = _clip('${b['displayName'] ?? ''}'.trim(), 20);
           if (d.length < 2) throw ApiError(400, 'Ad çok kısa');
           u.displayName = d;
+          tableOf(u.id)?.updatePlayer(_seatPlayer(u));
           store.log(actor, 'Ad değiştirildi → $d', u.username);
         case 'resetPassword':
           final pe = validatePassword('${b['password'] ?? ''}');

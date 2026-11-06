@@ -282,6 +282,28 @@ String presenceLabel(Presence s) => switch (s) {
       Presence.chosen => 'Seçildi',
     };
 
+/// Yönetim panelinden gelen görünüm ayarları (arka plan rengi/fotoğrafı, logo).
+class Brand extends InheritedWidget {
+  const Brand({super.key, this.background, this.backgroundImage = '', this.logo = '', required super.child});
+  final Color? background;
+  final String backgroundImage;
+  final String logo;
+
+  static Brand? of(BuildContext context) => context.dependOnInheritedWidgetOfExactType<Brand>();
+
+  @override
+  bool updateShouldNotify(Brand oldWidget) =>
+      oldWidget.background != background || oldWidget.backgroundImage != backgroundImage || oldWidget.logo != logo;
+}
+
+Color? parseHexColor(String v) {
+  final m = RegExp(r'^#([0-9A-Fa-f]{6})([0-9A-Fa-f]{2})?$').firstMatch(v.trim());
+  if (m == null) return null;
+  final rgb = int.parse(m.group(1)!, radix: 16);
+  final a = m.group(2) == null ? 0xFF : int.parse(m.group(2)!, radix: 16);
+  return Color((a << 24) | rgb);
+}
+
 /// Uygulama geneli hareketli arka plan: yavaş dönen ışık lekeleri.
 class SpectreBackground extends StatefulWidget {
   const SpectreBackground({super.key, required this.child, this.animate = true});
@@ -318,12 +340,21 @@ class _SpectreBackgroundState extends State<SpectreBackground>
 
   @override
   Widget build(BuildContext context) {
+    final brand = Brand.of(context);
+    final img = brand?.backgroundImage ?? '';
     return Stack(
       fit: StackFit.expand,
       children: [
         RepaintBoundary(
-          child: CustomPaint(painter: _BgPainter(_c)),
+          child: CustomPaint(painter: _BgPainter(_c, base: brand?.background)),
         ),
+        if (img.isNotEmpty)
+          Positioned.fill(
+            child: Opacity(
+              opacity: 0.55,
+              child: Image.network(img, fit: BoxFit.cover, errorBuilder: (_, __, ___) => const SizedBox.shrink()),
+            ),
+          ),
         widget.child,
       ],
     );
@@ -331,19 +362,21 @@ class _SpectreBackgroundState extends State<SpectreBackground>
 }
 
 class _BgPainter extends CustomPainter {
-  _BgPainter(this.anim) : super(repaint: anim);
+  _BgPainter(this.anim, {this.base}) : super(repaint: anim);
   final Animation<double> anim;
+  final Color? base;
 
   @override
   void paint(Canvas canvas, Size size) {
     final r = Offset.zero & size;
+    final b = base ?? SpectreColors.bg;
     canvas.drawRect(
       r,
       Paint()
-        ..shader = const LinearGradient(
+        ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFF07152A), SpectreColors.bg, Color(0xFF040810)],
+          colors: [Color.lerp(b, const Color(0xFF1A3A66), 0.25)!, b, Color.lerp(b, Colors.black, 0.4)!],
         ).createShader(r),
     );
     final t = anim.value * 2 * math.pi;
@@ -367,7 +400,7 @@ class _BgPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_BgPainter old) => false;
+  bool shouldRepaint(_BgPainter oldDelegate) => oldDelegate.base != base;
 }
 
 /// Basit çubuk grafik (bağımlılıksız).
@@ -535,5 +568,27 @@ class CoinPill extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+
+/// Marka logosu: admin panelinden yüklenen görsel, yoksa degrade yazı.
+class BrandLogo extends StatelessWidget {
+  const BrandLogo({super.key, required this.text, this.size = 26, this.letterSpacing = 4});
+  final String text;
+  final double size;
+  final double letterSpacing;
+
+  @override
+  Widget build(BuildContext context) {
+    final logo = Brand.of(context)?.logo ?? '';
+    final fallback = ShaderMask(
+      shaderCallback: (r) =>
+          const LinearGradient(colors: [SpectreColors.cyan, SpectreColors.accent, Color(0xFF3A5BFF)]).createShader(r),
+      child: Text(text,
+          style: TextStyle(fontSize: size, fontWeight: FontWeight.w900, letterSpacing: letterSpacing, color: Colors.white)),
+    );
+    if (logo.isEmpty) return fallback;
+    return Image.network(logo, height: size * 1.5, fit: BoxFit.contain, errorBuilder: (_, __, ___) => fallback);
   }
 }
