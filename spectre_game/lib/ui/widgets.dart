@@ -4,7 +4,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../data/models.dart';
+import 'package:spectre_core/spectre_core.dart';
 import 'theme.dart';
 
 /// Buzlu cam yüzey.
@@ -167,15 +167,15 @@ class PlayerAvatar extends StatelessWidget {
     this.highlight,
   });
 
-  final Player player;
+  final SeatPlayer player;
   final double size;
-  final PresenceState? presence;
+  final Presence? presence;
   final Color? highlight;
 
   @override
   Widget build(BuildContext context) {
-    final c = player.color;
-    final ring = highlight ?? (player.isVip ? SpectreColors.gold : Colors.white.withOpacity(0.35));
+    final c = Color(player.color);
+    final ring = highlight ?? (player.vip ? SpectreColors.gold : Colors.white.withOpacity(0.35));
     return SizedBox.square(
       dimension: size,
       child: Stack(
@@ -206,7 +206,7 @@ class PlayerAvatar extends StatelessWidget {
               ),
               child: Center(
                 child: Text(
-                  player.initials,
+                  initialsOf(player.name),
                   style: TextStyle(
                     fontSize: size * 0.34,
                     fontWeight: FontWeight.w800,
@@ -223,7 +223,7 @@ class PlayerAvatar extends StatelessWidget {
               bottom: size * 0.02,
               child: _PresenceDot(state: presence!, size: size * 0.24),
             ),
-          if (player.isVip && size >= 36)
+          if (player.vip && size >= 36)
             Positioned(
               top: -size * 0.12,
               left: 0,
@@ -238,7 +238,7 @@ class PlayerAvatar extends StatelessWidget {
 
 class _PresenceDot extends StatelessWidget {
   const _PresenceDot({required this.state, required this.size});
-  final PresenceState state;
+  final Presence state;
   final double size;
 
   @override
@@ -258,22 +258,28 @@ class _PresenceDot extends StatelessWidget {
   }
 }
 
-Color presenceColor(PresenceState s) => switch (s) {
-      PresenceState.online => SpectreColors.green,
-      PresenceState.away => SpectreColors.amber,
-      PresenceState.spinning => SpectreColors.accent,
-      PresenceState.waiting => SpectreColors.cyan,
-      PresenceState.chosen => SpectreColors.pink,
-      PresenceState.muted => SpectreColors.red,
+String initialsOf(String name) {
+  final parts = name.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+  if (parts.isEmpty) return '?';
+  String first(String s) => String.fromCharCode(s.runes.first);
+  if (parts.length == 1) return parts.first.runes.take(2).map(String.fromCharCode).join().toUpperCase();
+  return (first(parts[0]) + first(parts[1])).toUpperCase();
+}
+
+Color presenceColor(Presence s) => switch (s) {
+      Presence.online => SpectreColors.green,
+      Presence.away => SpectreColors.amber,
+      Presence.spinning => SpectreColors.accent,
+      Presence.waiting => SpectreColors.cyan,
+      Presence.chosen => SpectreColors.pink,
     };
 
-String presenceLabel(PresenceState s) => switch (s) {
-      PresenceState.online => 'Çevrimiçi',
-      PresenceState.away => 'Uzakta',
-      PresenceState.spinning => 'Çeviriyor',
-      PresenceState.waiting => 'Bekliyor',
-      PresenceState.chosen => 'Seçildi',
-      PresenceState.muted => 'Susturuldu',
+String presenceLabel(Presence s) => switch (s) {
+      Presence.online => 'Çevrimiçi',
+      Presence.away => 'Bağlantı koptu',
+      Presence.spinning => 'Çeviriyor',
+      Presence.waiting => 'Bekliyor',
+      Presence.chosen => 'Seçildi',
     };
 
 /// Uygulama geneli hareketli arka plan: yavaş dönen ışık lekeleri.

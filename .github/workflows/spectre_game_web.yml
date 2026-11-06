@@ -1,4 +1,4 @@
-name: SPECTRE Oyun - Web (WASM)
+name: SPECTRE Oyun - Test ve Web (WASM)
 
 on:
   push:
@@ -10,9 +10,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    defaults:
-      run:
-        working-directory: spectre_game
     steps:
       - uses: actions/checkout@v4
 
@@ -21,19 +18,29 @@ jobs:
           flutter-version: "3.24.5"
           channel: stable
 
-      - name: Bagimliliklar
-        run: flutter pub get
+      - name: Cekirdek - analiz ve test
+        working-directory: spectre_game/packages/spectre_core
+        run: dart pub get && dart analyze && dart test
 
-      - name: Analiz
-        run: flutter analyze
+      - name: Sunucu - analiz ve test
+        working-directory: spectre_game/server
+        run: dart pub get && dart analyze && dart test
 
-      - name: Testler
-        run: flutter test
+      - name: Uygulama - analiz ve test
+        working-directory: spectre_game
+        run: flutter pub get && flutter analyze && flutter test
 
       - name: WebAssembly derle
+        working-directory: spectre_game
         run: flutter build web --wasm --release
+
+      - name: Sunucuyu derle
+        working-directory: spectre_game/server
+        run: dart compile exe bin/server.dart -o ../build/spectre-server
 
       - uses: actions/upload-artifact@v4
         with:
-          name: spectre-game-web
-          path: spectre_game/build/web
+          name: spectre-game
+          path: |
+            spectre_game/build/web
+            spectre_game/build/spectre-server

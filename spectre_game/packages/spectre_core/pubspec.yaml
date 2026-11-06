@@ -1,0 +1,11 @@
+name: spectre_core
+description: SPECTRE ortak oyun kuralları ve iletişim protokolü (saf Dart; sunucu ve uygulama birlikte kullanır).
+publish_to: 'none'
+version: 0.2.0
+
+environment:
+  sdk: '>=3.5.0 <4.0.0'
+
+dev_dependencies:
+  test: ^1.25.0
+  lints: ^4.0.0

@@ -1,0 +1,21 @@
+# /etc/systemd/system/spectre-game.service
+# Önce derleyin:
+#   cd spectre_game && flutter build web --wasm --release
+#   cd server && dart compile exe bin/server.dart -o /opt/spectre/spectre-server
+#   rsync -a ../build/web/ /opt/spectre/web/
+[Unit]
+Description=SPECTRE oyun sunucusu
+After=network.target
+
+[Service]
+User=spectre
+WorkingDirectory=/opt/spectre
+# İlk açılışta yönetici hesabı (sonra admin panelinden şifreyi değiştirin):
+Environment=SPECTRE_ADMIN_USER=admin
+# Environment=SPECTRE_ADMIN_PASSWORD=...   (boş bırakılırsa rastgele üretilir: /opt/spectre/data/admin-ilk-sifre.txt)
+ExecStart=/opt/spectre/spectre-server --host 127.0.0.1 --port 8090 --data /opt/spectre/data --web /opt/spectre/web
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

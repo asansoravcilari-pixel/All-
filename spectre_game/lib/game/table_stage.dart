@@ -1,10 +1,10 @@
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../data/game_table.dart';
-import '../data/models.dart';
+import 'package:spectre_core/spectre_core.dart';
+
+import '../data/room_state.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
 import 'stage_painters.dart';
@@ -35,7 +35,7 @@ class TableStage extends StatefulWidget {
     required this.light,
   });
 
-  final GameTable table;
+  final RoomState table;
   final String meId;
   final void Function(int seat) onSeatTap;
   final bool light;
@@ -48,7 +48,6 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
   late final AnimationController _clock =
       AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat();
   final _fx = GlobalKey<_FxLayerState>();
-  StreamSubscription<TableEvent>? _sub;
   final _start = DateTime.now();
 
   @override
@@ -61,18 +60,18 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
   void didUpdateWidget(TableStage old) {
     super.didUpdateWidget(old);
     if (old.table != widget.table) {
-      _sub?.cancel();
+      old.table.removeFxListener(_onFx);
       _listen();
     }
   }
 
-  void _listen() {
-    _sub = widget.table.events.listen((e) => _fx.currentState?.add(e));
-  }
+  void _onFx(RoomFx e) => _fx.currentState?.add(e);
+
+  void _listen() => widget.table.addFxListener(_onFx);
 
   @override
   void dispose() {
-    _sub?.cancel();
+    widget.table.removeFxListener(_onFx);
     _clock.dispose();
     super.dispose();
   }
@@ -90,7 +89,7 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final table = widget.table;
-    final theme = TableTheme.all[table.theme % TableTheme.all.length];
+    final theme = TableTheme.all[(table.room?.theme ?? 0) % TableTheme.all.length];
     return AspectRatio(
       aspectRatio: 1,
       child: LayoutBuilder(builder: (context, box) {
@@ -109,8 +108,9 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
                     final time = now.difference(_start).inMilliseconds / 1000;
                     final r = table.round;
                     final spinning = r.phase == RoundPhase.spinning;
-                    final myTurn = r.phase == RoundPhase.idle &&
-                        table.seats[r.spinnerSeat].player?.id == widget.meId;
+                    final myTurn = r.active &&
+                        r.phase == RoundPhase.idle &&
+                        table.seats[r.spinnerSeat].player?.userId == widget.meId;
                     final wobble = myTurn && !widget.light ? math.sin(time * 5) * 0.05 : 0.0;
                     final glow = spinning
                         ? (1 - table.phaseProgress(now)).clamp(0.2, 1.0)
@@ -123,7 +123,7 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
                               theme: theme,
                               time: widget.light ? 0 : time,
                               seatCount: table.seats.length,
-                              activeSeat: table.occupied >= 2 ? r.spinnerSeat : null,
+                              activeSeat: r.active ? r.spinnerSeat : null,
                               targetSeat: r.phase == RoundPhase.deciding || r.phase == RoundPhase.result
                                   ? r.targetSeat
                                   : null,
@@ -157,7 +157,7 @@ class _TableStageState extends State<TableStage> with TickerProviderStateMixin {
                 seat: seat,
                 table: table,
                 clock: _clock,
-                isMe: seat.player?.id == widget.meId,
+                isMe: seat.player?.userId == widget.meId,
                 onTap: () => widget.onSeatTap(seat.index),
               ),
             // Efektler
@@ -185,8 +185,8 @@ class _SeatSlot extends StatelessWidget {
   });
 
   final StageGeometry geo;
-  final Seat seat;
-  final GameTable table;
+  final SeatView seat;
+  final RoomState table;
   final Animation<double> clock;
   final bool isMe;
   final VoidCallback onTap;
@@ -197,7 +197,8 @@ class _SeatSlot extends StatelessWidget {
     final pos = geo.seat(seat.index);
     final p = seat.player;
     final r = table.round;
-    final isSpinner = p != null && table.occupied >= 2 && r.spinnerSeat == seat.index;
+    final isSpinner = p != null && r.active && r.spinnerSeat == seat.index;
+    final bubble = table.bubbleFor(seat.index);
     final isTarget = p != null &&
         r.targetSeat == seat.index &&
         (r.phase == RoundPhase.deciding || r.phase == RoundPhase.result);
@@ -222,7 +223,7 @@ class _SeatSlot extends StatelessWidget {
           child: p == null
               ? _EmptySeat(key: const ValueKey('empty'), size: s)
               : Column(
-                  key: ValueKey(p.id),
+                  key: ValueKey(p.userId),
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     SizedBox.square(
@@ -243,7 +244,10 @@ class _SeatSlot extends StatelessWidget {
                                 ),
                               ),
                             ),
-                          AnimatedScale(
+                          AnimatedOpacity(
+                            opacity: seat.connected ? 1 : 0.45,
+                            duration: SpectreMotion.normal,
+                            child: AnimatedScale(
                             scale: isTarget || isSpinner ? 1.08 : 1,
                             duration: SpectreMotion.slow,
                             curve: SpectreMotion.spring,
@@ -261,16 +265,17 @@ class _SeatSlot extends StatelessWidget {
                               ),
                             ),
                           ),
+                          ),
                           if (decision != null)
                             Positioned(
                               right: -2,
                               top: -2,
                               child: _DecisionBadge(accepted: decision),
                             ),
-                          if (seat.bubble != null)
+                          if (bubble != null)
                             Positioned(
                               bottom: s * 0.92,
-                              child: _Bubble(text: seat.bubble!, key: ValueKey(seat.bubbleAt)),
+                              child: _Bubble(text: bubble, key: ValueKey(bubble)),
                             ),
                         ],
                       ),
@@ -425,16 +430,16 @@ class _FxLayerState extends State<_FxLayer> with TickerProviderStateMixin {
   final List<_Fx> _items = [];
   final _rnd = math.Random();
 
-  void add(TableEvent e) {
+  void add(RoomFx e) {
     if (!mounted) return;
     final g = widget.geo;
     switch (e) {
-      case GiftEvent(:final fromSeat, :final toSeat, :final gift):
+      case FxGift(:final fromSeat, :final toSeat, :final gift):
         _spawn(const Duration(milliseconds: 1300), (t) => _flyingGift(g.seat(fromSeat), g.seat(toSeat), gift.emoji, t));
-      case ReactionEvent(:final seat, :final emoji):
+      case FxReaction(:final seat, :final emoji):
         final dx = (_rnd.nextDouble() - 0.5) * 30;
         _spawn(const Duration(milliseconds: 1600), (t) => _floatUp(g.seat(seat) + Offset(dx, 0), emoji, t));
-      case MatchEvent(:final a, :final b, :final success):
+      case FxMatch(:final a, :final b, :final success):
         if (success) {
           final mid = Offset.lerp(g.seat(a), g.seat(b), 0.5)!;
           final n = widget.light ? 6 : 16;
@@ -448,11 +453,11 @@ class _FxLayerState extends State<_FxLayer> with TickerProviderStateMixin {
           _spawn(const Duration(milliseconds: 1400), (t) => _pulseRing(g.seat(b), SpectreColors.pink, t));
           _spawn(const Duration(milliseconds: 1800), (t) => _flyingGift(g.seat(a), mid, '💞', t));
         }
-      case JoinEvent(:final seat, :final joined):
+      case FxSeat(:final seat, :final joined):
         if (joined) {
           _spawn(const Duration(milliseconds: 900), (t) => _pulseRing(g.seat(seat), SpectreColors.accent, t));
         }
-      case NoticeEvent():
+      case FxNotice():
         break;
     }
   }

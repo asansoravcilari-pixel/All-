@@ -1,123 +1,73 @@
 # SPECTRE → Flutter (WebAssembly) Geçiş Planı
 
-Bu belge, SPECTRE'nin HTML/JS sürümünden (v39) Flutter Web + WebAssembly
-sürümüne **tasarım kimliği ve işlevler kaybedilmeden** nasıl geçileceğini anlatır.
+## Temel karar
 
-## 0. Temel karar: Özgün oyun
+SPECTRE, başka bir oyunun sunucusuna, hesaplarına ya da dosyalarına bağlanmayan
+**kendi oyunumuzdur**. Masa, şişe, efektler ve simgeler bu projede çizildi.
+Oyuncular SPECTRE hesabıyla SPECTRE sunucusunda oynar. v39'daki üçüncü taraf
+oyuna yönelik "bağlantı motoru / otomasyon motoru / oyun hesabı bağlama"
+bölümleri taşınmaz.
 
-Yeni sürüm, başka bir oyunun sunucusuna, hesaplarına ya da dosyalarına
-bağlanmayan **kendi SPECTRE oyunumuzdur**:
+## Korunan SPECTRE kimliği
 
-- Masa, şişe, efektler ve hediye simgeleri bu projede sıfırdan çizildi
-  (vektör `CustomPainter` + sistem emojileri). Başka bir oyundan alınmış
-  görsel, Spine dosyası ya da ikon kullanılmaz.
-- Oyuncular SPECTRE hesabıyla SPECTRE sunucusunda oynar.
-- v39'daki üçüncü taraf oyuna yönelik "otomasyon / köprü / hesap bağlama"
-  bölümleri taşınmaz.
-
-## 1. Korunan SPECTRE kimliği
-
-| Öğe | v39 kaynağı | Flutter karşılığı |
+| Öğe | v39 | Flutter |
 |---|---|---|
-| Electric-blue palet (`--sp-accent #65c5ff` vb.) | `v38/electric-blue-v38.css` | `lib/ui/theme.dart` → `SpectreColors` |
-| Manrope yazı tipi (OFL) | `v38/manrope-variable-v38.ttf` | `assets/fonts/Manrope-*.ttf` (400–800 statik ağırlıklar) |
-| Cam yüzeyler, yumuşak gölgeler | `spectre-modern.css`, `platinum-materials-v38.css` | `GlassPanel`, `PressButton` |
-| 12 koltuklu masa + ortada şişe | `spectre-masa.html` | `TableStage` |
-| Masa üstü üç sütun / telefonda tek sütun | `spectre-modern.css` (≥1100 px) | `TableScreen` (≥1000 px'te sağda sohbet) |
-| Admin bölümleri | `admin.html`, `admin-ext*.js` | `lib/admin/*` (aşağıdaki eşleme) |
+| Electric-blue palet | `v38/electric-blue-v38.css` | `lib/ui/theme.dart` |
+| Manrope yazı tipi (OFL) | `v38/manrope-variable-v38.ttf` | `assets/fonts/Manrope-*.ttf` |
+| Cam yüzeyler | `spectre-modern.css` | `GlassPanel`, `PressButton` |
+| 12 koltuk + ortada şişe | `spectre-masa.html` | `TableStage` |
+| Masaüstünde çok sütun | `spectre-modern.css` (≥1100 px) | `TableScreen` (≥1200 px üç, ≥900 px iki sütun) |
 
-## 2. Admin bölümleri eşlemesi
+## Admin bölümleri eşlemesi
 
 | v39 sekmesi | Yeni yer | Durum |
 |---|---|---|
-| Marka & Tema, Logolar & Metinler | Marka & Oyun → Marka | ✅ ad + slogan; logo yükleme sunucu ile gelecek |
-| Masa Kontrolleri, Oyuncu Düğmeleri | Marka & Oyun → Masa kuralları | ✅ süreler, sohbet, hediye, hafif mod |
-| Özellikler, Paketler | Market | ✅ paket ekle/düzenle/pasifleştir, hediye kataloğu |
-| Siparişler, Ödeme | Siparişler & Ödeme | ✅ onay, iade, iptal, PayTR/Shopier/manuel anahtarları |
-| Müşteriler (Yönet) | Oyuncular | ✅ arama/filtre, coin düzeltme, sustur, masadan çıkar, askıya al, yasakla, rol, uyarı, iç not, coin geçmişi |
-| Politika & Bakım | Sistem & Güvenlik | ✅ bakım modu, kayıt, misafir girişi, 2FA zorunluluğu |
-| Yedek & JSON | Marka & Oyun → Yedek & JSON | ✅ dışa aktarma (içe aktarma sunucu ile) |
-| PWA & Performans | Flutter web manifest + hafif mod | ✅ temel; ikon seti güncellenecek |
-| Mail, Giriş & Kayıt, Canlı Destek, Bildirimler, Tanıtım sitesi | — | ⏳ Faz 3 (sunucu gerektiriyor) |
-| Otomasyon / Efekt / Bağlantı Motoru | — | ❌ taşınmaz (üçüncü taraf oyuna yönelikti) |
+| Marka & Tema, Logolar & Metinler | Marka & Oyun | ✅ ad, slogan · ⏳ logo yükleme |
+| Masa Kontrolleri | Marka & Oyun → Masa kuralları | ✅ süreler, sohbet, hediye, koltuk koruma |
+| Özellikler, Paketler | Market | ✅ |
+| Siparişler, Ödeme | Siparişler & Ödeme | ✅ onay/iade/iptal, Havale/EFT bilgisi · ⏳ PayTR/Shopier callback |
+| Müşteriler | Oyuncular | ✅ |
+| Politika & Bakım | Sistem & Güvenlik | ✅ |
+| Yedek & JSON | Marka & Oyun → Yedek | ✅ dışa aktarma · ⏳ içe aktarma |
+| Giriş & Kayıt | Oyuncu girişi + Sistem | ✅ kullanıcı adı/şifre, misafir, kayıt aç/kapa · ⏳ e-posta doğrulama, Google |
+| Mail, Canlı Destek, Bildirimler, Tanıtım sitesi | — | ⏳ Faz 3 |
+| Otomasyon / Bağlantı Motoru, çoklu oyun hesabı | — | ❌ taşınmaz |
 
-**Yeni bölümler:** Kontrol Merkezi (canlı özet + gelir grafiği + doluluk),
-Canlı Masalar (anlık izleme, duyuru, kilitle, kapat, oyuncu detayı),
-Ekonomi & Finans (brüt/net gelir, iade, ARPPU, dönüşüm, sağlayıcı ve paket
-dağılımı, coin defteri, en çok harcayanlar), güvenlik olayları ve tam denetim kaydı.
+## Fazlar
 
-## 3. Mimari
+### Faz 1 — Tamamlandı
+Flutter projesi, WebAssembly derlemesi, masa/lobi/market arayüzü, yönetim merkezi.
 
-```
-lib/
-  data/
-    models.dart       Oyuncu, koltuk, tur, hediye, sipariş, defter, denetim
-    game_table.dart   Masa kuralları (saf mantık, zaman dışarıdan → test edilebilir)
-    backend.dart      Tek veri kaynağı (şimdilik istemci içi benzetim)
-  game/               Lobi, masa ekranı, sahne, efekt katmanı, market
-  admin/              Yönetim merkezi sayfaları
-  ui/                 Tema ve ortak bileşenler
-```
+### Faz 2 — Tamamlandı (bu teslim)
+- `packages/spectre_core`: sunucu ve uygulamanın ortak oyun kuralları + protokol.
+- `server/`: Dart oyun sunucusu. Kayıt/giriş (PBKDF2), oturumlar, masalar,
+  `room` / `roomPlayer` / `user` uçları, WebSocket `room<roomId>` kanalı,
+  `seat.updated` / `seat.vacated`, sunucu yetkili tur zamanlayıcısı,
+  hediye ve coin defteri, siparişler, yönetici hesapları, denetim kaydı,
+  JSON dosyada kalıcı veri, Flutter web dosyalarını COOP/COEP başlıklarıyla sunma.
+- Uygulamadaki benzetim (botlar, örnek oyuncu/sipariş) tamamen kaldırıldı.
+- Yönetici girişi kullanıcı adı + şifre (sunucuda doğrulanır).
+- Masaüstü üç sütunlu masa ekranı.
 
-`SpectreBackend` şu an tarayıcı içinde botlarla çalışan bir **benzetimdir**
-(canlı masalar, sohbet, hediye, sipariş akışı). Arayüz yalnızca bu sınıfın
-genel API'sini kullanır; gerçek sunucuya geçerken arayüz değişmez, sadece bu
-katman WebSocket istemcisine dönüştürülür.
+### Faz 3 — Sıradaki
+- PayTR / Shopier ödeme bildirimi (callback) doğrulaması
+- E-posta doğrulama ve şifre sıfırlama (v39 `mailer.py` mantığı), Google girişi
+- Avatar/fotoğraf yükleme, logo yükleme
+- Canlı destek, bildirim merkezi, tanıtım sitesi
+- Veri büyüyünce JSON dosyadan SQLite/PostgreSQL'e geçiş (aynı `Store` arayüzü)
 
-## 4. Fazlar
+### Faz 4
+Android/iOS derlemeleri (aynı kod), gerçek cihaz testleri, push bildirimleri.
 
-### Faz 1 — Tamamlandı (bu teslim)
-- Flutter projesi, WebAssembly derlemesi (`flutter build web --wasm`)
-- Masa: vektörel zemin ve şişe, gerçekçi yavaşlayan dönüş, hedef ışını,
-  süre halkası, karar rozetleri, sohbet balonları, uçan hediye, tepki,
-  eşleşme patlaması, giriş dalgası, bildirim kartları
-- Lobi, hızlı oyna, günlük ödül, market (benzetim ödeme)
-- Yönetim merkezi (8 bölüm), PIN kapısı
-- 13 otomatik test (oyun kuralları, ekonomi, sipariş/iade, yasak, bakım, widget)
+## WebAssembly
 
-### Faz 2 — Sunucu (önerilen: mevcut `control.py` üzerine)
-- Hesap: kayıt / giriş / e-posta doğrulama / şifre sıfırlama (v39 `mailer.py` yeniden kullanılır)
-- Gerçek zamanlı masa: WebSocket; tur zamanlayıcısı **sunucuda** (hile önleme)
-- Coin defteri ve siparişler veritabanında (SQLite → PostgreSQL)
-- PayTR bildirim (callback) doğrulaması sunucuda; anahtarlar ortam değişkeninde
-- Admin yetkisi sunucuda (rol tabanlı), istemci PIN'i kaldırılır
+- `flutter build web --wasm --release` → WASM + JS yedeği.
+- Sunucu `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy`
+  başlıklarını kendisi gönderir (çok iş parçacıklı Skwasm için).
+- Motor dosyaları dış CDN yerine kendi sunucudan yüklenir (`web/flutter_bootstrap.js`).
 
-### Faz 3 — Kalan v39 özellikleri
-- Mail ayarları, canlı destek (v39 `support.py`), bildirim merkezi, tanıtım sitesi
-- Logo / arka plan yükleme, metin ve etiket yönetimi
-- Yedekten geri yükleme
+## Bilinen sınırlar
 
-### Faz 4 — Mağaza ve cihazlar
-- Android/iOS derlemeleri (aynı kod), gerçek cihaz testleri
-- Push bildirimleri
-
-## 5. WebAssembly notları
-
-- Derleme: `flutter build web --wasm --release` → `build/web` (WASM + JS yedeği).
-  Tarayıcı WasmGC desteklemiyorsa otomatik olarak JS sürümü yüklenir.
-- En iyi performans (çok iş parçacıklı Skwasm) için sunucu şu başlıkları göndermeli:
-  ```
-  Cross-Origin-Opener-Policy: same-origin
-  Cross-Origin-Embedder-Policy: require-corp
-  ```
-  NGINX örneği:
-  ```nginx
-  location / {
-      root /var/www/spectre_game;
-      add_header Cross-Origin-Opener-Policy same-origin always;
-      add_header Cross-Origin-Embedder-Policy require-corp always;
-      try_files $uri $uri/ /index.html;
-  }
-  ```
-- Motor dosyaları (`canvaskit/`) dış CDN yerine kendi sunucumuzdan yüklenir
-  (`web/flutter_bootstrap.js`).
-- Kod `dart:html` / `dart:io` kullanmaz; WASM ile uyumludur.
-
-## 6. Bilinen sınırlar
-
-- Veriler kalıcı değildir (sayfa yenilenince benzetim sıfırlanır) — Faz 2.
-- Ödeme akışı benzetimdir; gerçek PayTR/Shopier entegrasyonu sunucu ister.
-- Admin PIN'i (`--dart-define=ADMIN_PIN=...`, varsayılan `0000`) yalnız
-  önizleme içindir; gerçek güvenlik değildir.
-- Gerçek telefonlarda test edilmedi; tarayıcıda 390×844 ve 1366×820 boyutlarında denendi.
-- Emoji görünümü cihazın emoji yazı tipine bağlıdır.
+- Kartlı ödeme otomatik onaylanmaz; siparişler yönetici onayına düşer.
+- Tek sunucu süreci için tasarlandı (yatay ölçekleme yok).
+- Gerçek telefonlarda test edilmedi; tarayıcıda 390×844 ve 1440×860 denendi.

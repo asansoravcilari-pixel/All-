@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:spectre_core/spectre_core.dart';
 
 import '../admin/admin_shell.dart';
-import '../data/backend.dart';
-import '../data/game_table.dart';
-import '../data/models.dart';
+import '../data/api.dart';
+import '../data/client.dart';
 import '../ui/theme.dart';
 import '../ui/widgets.dart';
 import 'stage_painters.dart';
@@ -22,80 +22,107 @@ Route<T> spectreRoute<T>(Widget page) => PageRouteBuilder<T>(
       },
     );
 
+String tl(int kurus) {
+  final s = (kurus / 100).toStringAsFixed(2);
+  final parts = s.split('.');
+  final buf = StringBuffer();
+  final int0 = parts[0];
+  for (var i = 0; i < int0.length; i++) {
+    if (i > 0 && (int0.length - i) % 3 == 0) buf.write('.');
+    buf.write(int0[i]);
+  }
+  return '₺$buf,${parts[1]}';
+}
+
 class LobbyScreen extends StatelessWidget {
   const LobbyScreen({super.key});
 
-  void _open(BuildContext context, GameTable? t) {
-    final be = BackendScope.read(context);
-    if (be.settings.maintenance) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(be.settings.maintenanceText)));
+  static void openRoom(BuildContext context, RoomSummary r, {bool sit = true}) {
+    final c = ClientScope.read(context);
+    if (c.config.maintenance) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(c.config.maintenanceText)));
       return;
     }
-    if (t == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Uygun masa bulunamadı')));
-      return;
-    }
-    Navigator.of(context).push(spectreRoute(TableScreen(table: t)));
+    final state = c.openRoom(r.id, sit: sit && !r.locked && !r.isFull);
+    Navigator.of(context).push(spectreRoute(TableScreen(room: state)));
   }
 
   @override
   Widget build(BuildContext context) {
-    final be = BackendScope.of(context);
+    final c = ClientScope.of(context);
     final width = MediaQuery.sizeOf(context).width;
     final cols = width >= 1200 ? 3 : (width >= 720 ? 2 : 1);
-    final tables = be.tables.where((t) => !t.closed).toList();
+    final rooms = c.rooms;
     return Scaffold(
       body: SpectreBackground(
-        animate: !be.settings.lightMode,
+        animate: !c.lightMode,
         child: SafeArea(
-          child: CustomScrollView(
-            slivers: [
-              SliverToBoxAdapter(child: _Header(backend: be)),
-              if (be.settings.maintenance)
+          child: RefreshIndicator(
+            onRefresh: c.refreshRooms,
+            child: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(child: _Header(client: c)),
+                if (c.config.maintenance)
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      child: GlassPanel(
+                        tint: SpectreColors.amber.withOpacity(0.3),
+                        child: Row(children: [
+                          const Icon(Icons.construction_rounded, color: SpectreColors.amber),
+                          const SizedBox(width: 10),
+                          Expanded(child: Text(c.config.maintenanceText)),
+                        ]),
+                      ),
+                    ),
+                  ),
                 SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                    child: GlassPanel(
-                      tint: SpectreColors.amber.withOpacity(0.3),
-                      child: Row(children: [
-                        const Icon(Icons.construction_rounded, color: SpectreColors.amber),
-                        const SizedBox(width: 10),
-                        Expanded(child: Text(be.settings.maintenanceText)),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                    child: _HeroCard(client: c),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
+                    child: Row(children: [
+                      const Text('Masalar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                      const SizedBox(width: 8),
+                      Text('${rooms.fold(0, (a, r) => a + r.countInGamePlayers)} oyuncu',
+                          style: const TextStyle(color: SpectreColors.muted)),
+                    ]),
+                  ),
+                ),
+                if (rooms.isEmpty)
+                  const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.all(32),
+                      child: Column(children: [
+                        Icon(Icons.table_restaurant_outlined, size: 48, color: SpectreColors.muted),
+                        SizedBox(height: 10),
+                        Text('Henüz açık masa yok', style: TextStyle(fontWeight: FontWeight.w700)),
+                        Text('Masalar yönetim merkezinden açılır.', style: TextStyle(color: SpectreColors.muted)),
                       ]),
                     ),
-                  ),
-                ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                  child: _HeroCard(onPlay: () => _open(context, be.quickJoin()), backend: be),
-                ),
-              ),
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(20, 14, 20, 8),
-                  child: Text('Canlı masalar', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
-                ),
-              ),
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                sliver: SliverGrid(
-                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: cols,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
-                    mainAxisExtent: 128,
-                  ),
-                  delegate: SliverChildBuilderDelegate(
-                    (ctx, i) => _TableCard(
-                      table: tables[i],
-                      onTap: () => _open(ctx, tables[i].locked ? null : be.joinTable(tables[i])),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                    sliver: SliverGrid(
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: cols,
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        mainAxisExtent: 112,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (ctx, i) => _TableCard(room: rooms[i], onTap: () => openRoom(ctx, rooms[i])),
+                        childCount: rooms.length,
+                      ),
                     ),
-                    childCount: tables.length,
                   ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -104,50 +131,51 @@ class LobbyScreen extends StatelessWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.backend});
-  final SpectreBackend backend;
+  const _Header({required this.client});
+  final SpectreClient client;
 
   @override
   Widget build(BuildContext context) {
-    final s = backend.settings;
+    final cfg = client.config;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 12, 4),
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
       child: Row(
         children: [
           ShaderMask(
-            shaderCallback: (r) => const LinearGradient(colors: [SpectreColors.cyan, SpectreColors.accent, Color(0xFF3A5BFF)])
-                .createShader(r),
-            child: Text(s.brandName,
+            shaderCallback: (r) =>
+                const LinearGradient(colors: [SpectreColors.cyan, SpectreColors.accent, Color(0xFF3A5BFF)]).createShader(r),
+            child: Text(cfg.brandName,
                 style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, letterSpacing: 4, color: Colors.white)),
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(s.tagline,
+            child: Text(cfg.tagline,
                 overflow: TextOverflow.ellipsis, style: const TextStyle(color: SpectreColors.muted, fontSize: 12)),
           ),
-          CoinPill(coins: backend.me.coins),
-          const SizedBox(width: 4),
+          CoinPill(coins: client.me?.coins ?? 0),
           PopupMenuButton<String>(
             tooltip: 'Menü',
             icon: const Icon(Icons.more_vert_rounded),
-            onSelected: (v) {
+            onSelected: (v) async {
               switch (v) {
                 case 'market':
                   Navigator.of(context).push(spectreRoute(const MarketScreen()));
                 case 'name':
-                  _rename(context, backend);
+                  await _rename(context, client);
                 case 'light':
-                  s.lightMode = !s.lightMode;
-                  backend.touchSettings('Hafif mod');
+                  await client.setLightMode(!client.lightMode);
                 case 'admin':
                   Navigator.of(context).push(spectreRoute(const AdminShell()));
+                case 'logout':
+                  await client.logout();
               }
             },
             itemBuilder: (_) => [
-              if (s.marketOpen) const PopupMenuItem(value: 'market', child: Text('🛒  Market')),
+              if (cfg.marketOpen) const PopupMenuItem(value: 'market', child: Text('🛒  Market')),
               const PopupMenuItem(value: 'name', child: Text('✏️  Adımı değiştir')),
-              PopupMenuItem(value: 'light', child: Text(s.lightMode ? '✨  Efektleri aç' : '🔋  Hafif mod')),
+              PopupMenuItem(value: 'light', child: Text(client.lightMode ? '✨  Efektleri aç' : '🔋  Hafif mod')),
               const PopupMenuItem(value: 'admin', child: Text('🛡️  Yönetim merkezi')),
+              const PopupMenuItem(value: 'logout', child: Text('🚪  Çıkış yap')),
             ],
           ),
         ],
@@ -155,13 +183,13 @@ class _Header extends StatelessWidget {
     );
   }
 
-  Future<void> _rename(BuildContext context, SpectreBackend be) async {
-    final ctl = TextEditingController(text: be.me.name);
+  Future<void> _rename(BuildContext context, SpectreClient c) async {
+    final ctl = TextEditingController(text: c.me?.displayName ?? '');
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: SpectreColors.panel,
-        title: const Text('Oyuncu adı'),
+        title: const Text('Görünen ad'),
         content: TextField(controller: ctl, autofocus: true, maxLength: 20),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Vazgeç')),
@@ -169,59 +197,77 @@ class _Header extends StatelessWidget {
         ],
       ),
     );
-    if (name != null) be.renameMe(name);
+    if (name == null) return;
+    try {
+      await c.rename(name);
+    } on ApiException catch (e) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    }
   }
 }
 
 class _HeroCard extends StatelessWidget {
-  const _HeroCard({required this.onPlay, required this.backend});
-  final VoidCallback onPlay;
-  final SpectreBackend backend;
+  const _HeroCard({required this.client});
+  final SpectreClient client;
+
+  void _quickPlay(BuildContext context) {
+    final open = client.rooms.where((r) => !r.locked && !r.isFull).toList()
+      ..sort((a, b) => b.countInGamePlayers.compareTo(a.countInGamePlayers));
+    if (open.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Boş koltuğu olan masa yok')));
+      return;
+    }
+    LobbyScreen.openRoom(context, open.first);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final me = backend.me;
+    final me = client.me;
+    if (me == null) return const SizedBox.shrink();
     return GlassPanel(
       padding: const EdgeInsets.all(18),
       child: Row(
         children: [
-          PlayerAvatar(player: me, size: 64, presence: PresenceState.online),
+          PlayerAvatar(player: me.asSeatPlayer(), size: 64, presence: Presence.online),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Merhaba, ${me.name}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+                Text('Merhaba, ${me.displayName}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
                 const SizedBox(height: 2),
-                Text('${backend.onlineCount} oyuncu şu an masalarda',
+                Text('Seviye ${me.level} · ♥ ${me.hearts}${me.guest ? ' · Misafir' : ''}',
                     style: const TextStyle(color: SpectreColors.muted, fontSize: 13)),
                 const SizedBox(height: 10),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 8,
-                  children: [
-                    PressButton(
-                      onTap: onPlay,
-                      child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(Icons.play_arrow_rounded),
-                        SizedBox(width: 6),
-                        Text('Hızlı oyna'),
-                      ]),
-                    ),
-                    PressButton(
-                      filled: false,
-                      color: SpectreColors.gold,
-                      onTap: backend.canClaimDaily
-                          ? () {
-                              final n = backend.claimDaily();
-                              ScaffoldMessenger.of(context)
-                                  .showSnackBar(SnackBar(content: Text('Günlük ödül: +$n 🪙')));
+                Wrap(spacing: 10, runSpacing: 8, children: [
+                  PressButton(
+                    onTap: () => _quickPlay(context),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.play_arrow_rounded),
+                      SizedBox(width: 6),
+                      Text('Hızlı oyna'),
+                    ]),
+                  ),
+                  PressButton(
+                    filled: false,
+                    color: SpectreColors.gold,
+                    onTap: me.canClaimDaily
+                        ? () async {
+                            try {
+                              final n = await client.claimDaily();
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Günlük ödül: +$n 🪙')));
+                              }
+                            } on ApiException catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+                              }
                             }
-                          : null,
-                      child: Text(backend.canClaimDaily ? '🎁 Günlük ödül' : '✓ Ödül alındı'),
-                    ),
-                  ],
-                ),
+                          }
+                        : null,
+                    child: Text(me.canClaimDaily ? '🎁 Günlük ödül' : '✓ Ödül alındı'),
+                  ),
+                ]),
               ],
             ),
           ),
@@ -232,31 +278,33 @@ class _HeroCard extends StatelessWidget {
 }
 
 class _TableCard extends StatelessWidget {
-  const _TableCard({required this.table, required this.onTap});
-  final GameTable table;
+  const _TableCard({required this.room, required this.onTap});
+  final RoomSummary room;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final th = TableTheme.all[table.theme % TableTheme.all.length];
-    final players = table.players.take(6).toList();
+    final th = TableTheme.all[room.theme % TableTheme.all.length];
     return PressButton(
       filled: false,
       glow: false,
       color: th.primary,
       padding: const EdgeInsets.all(14),
-      onTap: table.locked ? null : onTap,
+      onTap: onTap,
       child: Row(
         children: [
           Container(
-            width: 64,
-            height: 64,
+            width: 60,
+            height: 60,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               gradient: RadialGradient(colors: [th.primary.withOpacity(0.5), th.floor]),
               border: Border.all(color: th.primary.withOpacity(0.6), width: 2),
             ),
-            child: const Center(child: Text('🍾', style: TextStyle(fontSize: 26))),
+            child: Center(
+              child: Text('${room.countInGamePlayers}',
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: Colors.white)),
+            ),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -266,37 +314,26 @@ class _TableCard extends StatelessWidget {
               children: [
                 Row(children: [
                   Flexible(
-                    child: Text(table.name,
+                    child: Text(room.name,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: SpectreColors.ink)),
                   ),
-                  if (table.locked) const Text('  🔒'),
+                  if (room.locked) const Text('  🔒'),
                 ]),
-                const SizedBox(height: 4),
+                const SizedBox(height: 6),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(4),
                   child: LinearProgressIndicator(
-                    value: table.occupied / table.seats.length,
+                    value: room.countInGamePlayers / room.capacity,
                     minHeight: 5,
                     backgroundColor: Colors.white10,
                     color: th.primary,
                   ),
                 ),
                 const SizedBox(height: 6),
-                SizedBox(
-                  height: 24,
-                  child: Stack(
-                    children: [
-                      for (var i = 0; i < players.length; i++)
-                        Positioned(left: i * 16.0, child: PlayerAvatar(player: players[i], size: 24)),
-                      Positioned(
-                        left: players.length * 16.0 + 14,
-                        top: 4,
-                        child: Text('${table.occupied}/${table.seats.length}',
-                            style: const TextStyle(fontSize: 12, color: SpectreColors.muted)),
-                      ),
-                    ],
-                  ),
+                Text(
+                  '${room.countInGamePlayers}/${room.capacity} koltuk dolu · ${room.inGamePlayers} aktif',
+                  style: const TextStyle(fontSize: 12, color: SpectreColors.muted),
                 ),
               ],
             ),
@@ -308,115 +345,151 @@ class _TableCard extends StatelessWidget {
   }
 }
 
-class MarketScreen extends StatelessWidget {
+// ---------------------------------------------------------------------------
+// Market
+// ---------------------------------------------------------------------------
+
+class MarketScreen extends StatefulWidget {
   const MarketScreen({super.key});
 
   @override
+  State<MarketScreen> createState() => _MarketScreenState();
+}
+
+class _MarketScreenState extends State<MarketScreen> {
+  late Future<List<Map<String, dynamic>>> _pkgs = ClientScope.read(context).packages();
+
+  @override
   Widget build(BuildContext context) {
-    final be = BackendScope.of(context);
-    final pkgs = be.packages.where((p) => p.active).toList();
+    final c = ClientScope.of(context);
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         title: const Text('Market', style: TextStyle(fontWeight: FontWeight.w800)),
-        actions: [Padding(padding: const EdgeInsets.only(right: 12), child: CoinPill(coins: be.me.coins))],
+        actions: [Padding(padding: const EdgeInsets.only(right: 12), child: CoinPill(coins: c.me?.coins ?? 0))],
       ),
       extendBodyBehindAppBar: true,
       body: SpectreBackground(
-        animate: !be.settings.lightMode,
+        animate: !c.lightMode,
         child: SafeArea(
-          child: !be.settings.marketOpen
-              ? const Center(child: Text('Market şu an kapalı'))
-              : GridView.builder(
-                  padding: const EdgeInsets.all(16),
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 280,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
-                    mainAxisExtent: 210,
+          child: FutureBuilder<List<Map<String, dynamic>>>(
+            future: _pkgs,
+            builder: (context, snap) {
+              if (snap.hasError) {
+                return Center(
+                  child: TextButton(
+                    onPressed: () => setState(() => _pkgs = c.packages()),
+                    child: Text('${snap.error} — tekrar dene'),
                   ),
-                  itemCount: pkgs.length,
-                  itemBuilder: (ctx, i) {
-                    final p = pkgs[i];
-                    final total = p.coins + (p.coins * p.bonusPercent / 100).round();
-                    return GlassPanel(
-                      tint: p.featured ? SpectreColors.accent.withOpacity(0.35) : null,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(children: [
-                            Expanded(
-                                child: Text(p.name, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800))),
-                            if (p.featured)
-                              const Chip(label: Text('Popüler'), visualDensity: VisualDensity.compact),
-                          ]),
-                          const SizedBox(height: 6),
-                          Text('🪙 $total', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: SpectreColors.gold)),
-                          if (p.bonusPercent > 0)
-                            Text('+%${p.bonusPercent} bonus', style: const TextStyle(color: SpectreColors.green, fontSize: 12)),
-                          if (p.vipDays > 0)
-                            Text('👑 ${p.vipDays} gün VIP', style: const TextStyle(color: SpectreColors.gold, fontSize: 12)),
-                          const Spacer(),
-                          SizedBox(
-                            width: double.infinity,
-                            child: PressButton(
-                              onTap: () async {
-                                final provider = await _pickProvider(ctx, be);
-                                if (provider == null) return;
-                                final o = be.buyPackage(p, provider);
-                                if (!ctx.mounted) return;
-                                ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-                                  content: Text(o.status == OrderStatus.paid
-                                      ? 'Ödeme alındı, coin eklendi (${o.id})'
-                                      : 'Sipariş oluşturuldu, onay bekliyor (${o.id})'),
-                                ));
-                              },
-                              child: Center(child: Text(tl(p.priceKurus))),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
+                );
+              }
+              if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+              final pkgs = snap.data!;
+              if (pkgs.isEmpty) {
+                return const Center(child: Text('Şu an satışta paket yok', style: TextStyle(color: SpectreColors.muted)));
+              }
+              return GridView.builder(
+                padding: const EdgeInsets.all(16),
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 280,
+                  mainAxisSpacing: 12,
+                  crossAxisSpacing: 12,
+                  mainAxisExtent: 210,
                 ),
+                itemCount: pkgs.length,
+                itemBuilder: (ctx, i) => _PackageCard(p: pkgs[i], client: c),
+              );
+            },
+          ),
         ),
       ),
     );
   }
+}
 
-  Future<PaymentProvider?> _pickProvider(BuildContext context, SpectreBackend be) {
-    final s = be.settings;
+class _PackageCard extends StatelessWidget {
+  const _PackageCard({required this.p, required this.client});
+  final Map<String, dynamic> p;
+  final SpectreClient client;
+
+  @override
+  Widget build(BuildContext context) {
+    final featured = p['featured'] == true;
+    final bonus = (p['bonusPercent'] as num?)?.toInt() ?? 0;
+    final vip = (p['vipDays'] as num?)?.toInt() ?? 0;
+    return GlassPanel(
+      tint: featured ? SpectreColors.accent.withOpacity(0.35) : null,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Expanded(child: Text('${p['name']}', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800))),
+            if (featured) const Chip(label: Text('Öne çıkan'), visualDensity: VisualDensity.compact),
+          ]),
+          const SizedBox(height: 6),
+          Text('🪙 ${p['totalCoins']}',
+              style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900, color: SpectreColors.gold)),
+          if (bonus > 0) Text('+%$bonus bonus', style: const TextStyle(color: SpectreColors.green, fontSize: 12)),
+          if (vip > 0) Text('👑 $vip gün VIP', style: const TextStyle(color: SpectreColors.gold, fontSize: 12)),
+          const Spacer(),
+          SizedBox(
+            width: double.infinity,
+            child: PressButton(
+              onTap: client.me?.guest == true ? null : () => _buy(context),
+              child: Center(child: Text(client.me?.guest == true ? 'Üye girişi gerekli' : tl((p['priceKurus'] as num).toInt()))),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _buy(BuildContext context) async {
+    final pay = client.config.payment;
     final options = [
-      if (s.paytrEnabled) PaymentProvider.paytr,
-      if (s.shopierEnabled) PaymentProvider.shopier,
-      if (s.manualApproval) PaymentProvider.manual,
+      if (pay['paytr'] == true) ('paytr', 'Kart ile (PayTR)'),
+      if (pay['shopier'] == true) ('shopier', 'Kart ile (Shopier)'),
+      if (pay['manual'] == true) ('manual', 'Havale / EFT'),
     ];
-    return showModalBottomSheet<PaymentProvider>(
+    final provider = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: SpectreColors.panel,
       builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Ödeme yöntemi', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('Ödeme yöntemi', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          ),
+          for (final o in options)
+            ListTile(
+              leading: Icon(o.$1 == 'manual' ? Icons.receipt_long_rounded : Icons.credit_card_rounded),
+              title: Text(o.$2),
+              onTap: () => Navigator.pop(ctx, o.$1),
             ),
-            for (final o in options)
-              ListTile(
-                leading: Icon(o == PaymentProvider.manual ? Icons.receipt_long_rounded : Icons.credit_card_rounded),
-                title: Text(providerLabel(o)),
-                subtitle: Text(o == PaymentProvider.manual
-                    ? 'Havale/EFT — yönetici onayı sonrası yüklenir'
-                    : (s.paytrTestMode && o == PaymentProvider.paytr ? 'Test modu' : 'Kart ile güvenli ödeme')),
-                onTap: () => Navigator.pop(ctx, o),
-              ),
-            if (options.isEmpty)
-              const Padding(padding: EdgeInsets.all(16), child: Text('Etkin ödeme yöntemi yok')),
-            const SizedBox(height: 12),
-          ],
-        ),
+          if (options.isEmpty) const Padding(padding: EdgeInsets.all(16), child: Text('Etkin ödeme yöntemi yok')),
+          const SizedBox(height: 12),
+        ]),
       ),
     );
+    if (provider == null || !context.mounted) return;
+    try {
+      final r = await client.createOrder('${p['id']}', provider);
+      final id = (r['order'] as Map)['id'];
+      if (!context.mounted) return;
+      final info = '${r['manualInfo'] ?? ''}';
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: SpectreColors.panel,
+          title: Text('Sipariş alındı ($id)'),
+          content: Text(provider == 'manual'
+              ? 'Ödemeniz yönetici onayından sonra hesabınıza yüklenir.${info.isEmpty ? '' : '\n\n$info'}'
+              : 'Siparişiniz oluşturuldu. Ödeme onaylandığında coinler hesabınıza yüklenir.'),
+          actions: [FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Tamam'))],
+        ),
+      );
+    } on ApiException catch (e) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+    }
   }
 }

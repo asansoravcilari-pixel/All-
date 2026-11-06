@@ -1,40 +1,72 @@
-# SPECTRE (Flutter / WebAssembly)
+# SPECTRE (Flutter WebAssembly + kendi sunucusu)
 
-Özgün şişe çevirme sosyal oyunu ve yönetim merkezi.
+Özgün şişe çevirme sosyal oyunu, oyun sunucusu ve yönetim merkezi.
+Tüm veriler (oyuncular, masalar, koltuklar, sohbet, hediyeler, siparişler)
+**SPECTRE sunucusundan** gelir; uygulamada sahte/örnek veri yoktur.
 
-## Çalıştırma
+```
+spectre_game/
+  lib/                     Flutter uygulaması (oyun + yönetim merkezi)
+  packages/spectre_core/   Ortak oyun kuralları ve protokol (sunucu + uygulama)
+  server/                  Oyun sunucusu (Dart, REST + WebSocket, JSON dosyada kalıcı veri)
+  deploy/                  systemd ve NGINX örnekleri
+  docs/                    Geçiş planı, API, ekran görüntüleri
+```
+
+## Hızlı başlangıç
 
 ```bash
 cd spectre_game
 flutter pub get
-flutter run -d chrome                              # geliştirme
-flutter build web --wasm --release                 # WebAssembly üretim derlemesi → build/web
-flutter build web --wasm --release --dart-define=ADMIN_PIN=1234
-flutter test                                       # otomatik testler
+flutter build web --wasm --release                     # → build/web
+
+cd server
+dart pub get
+SPECTRE_ADMIN_USER=admin SPECTRE_ADMIN_PASSWORD='en-az-8-karakter' \
+  dart run bin/server.dart --port 8090 --data ./data --web ../build/web
 ```
 
-Gereksinim: Flutter 3.24+ (Dart 3.5+).
+Tarayıcıda `http://localhost:8090` açın.
+
+1. Menü → **Yönetim merkezi** → kullanıcı adı + şifre ile giriş.
+2. **Canlı Masalar → Masa aç** ile masaları oluşturun.
+3. **Market** bölümünden hediye kataloğunu ve coin paketlerini ekleyin.
+4. Oyuncular **Kayıt ol** (kullanıcı adı + şifre) ya da misafir girişiyle oynar.
+
+`SPECTRE_ADMIN_PASSWORD` verilmezse ilk açılışta rastgele bir şifre üretilir ve
+`data/admin-ilk-sifre.txt` dosyasına yazılır.
+
+## Testler
+
+```bash
+cd packages/spectre_core && dart test     # oyun kuralları (7)
+cd server && dart test                    # gerçek HTTP + WebSocket uçtan uca (5)
+flutter test                              # istemci masa durumu (4)
+```
 
 ## Neler var
 
-- **Masa:** 12 koltuk, vektörel şişe ve zemin, yavaşlayarak duran dönüş,
-  hedef ışını, süre halkası, kabul/pas kararı, sohbet balonları, uçan
-  hediyeler, tepkiler, eşleşme efekti, bildirim kartları, oyuncu kartı.
-- **Lobi:** canlı masalar, hızlı oyna, günlük ödül, market, hafif mod.
-- **Yönetim merkezi** (menü → Yönetim merkezi, varsayılan PIN `0000`):
-  Kontrol Merkezi, Oyuncular, Canlı Masalar, Ekonomi & Finans, Market,
-  Siparişler & Ödeme, Sistem & Güvenlik, Marka & Oyun.
+- **Masa:** 12 koltuk, vektörel şişe, yavaşlayarak duran dönüş, hedef ışını,
+  süre halkası, kabul/pas, sohbet balonları, uçan hediye, tepkiler, eşleşme
+  efekti, bağlantısı kopan oyuncu soluk görünür.
+  Masaüstü üç sütun (oyuncu listesi | masa | sohbet), tablet iki sütun,
+  telefon tek sütun + açılır sohbet.
+- **Sunucu yetkili:** Tur zamanlayıcısı, hedef seçimi, coin düşümü sunucuda.
+  Hız sınırları, yasaklı kelime, IP engeli, hatalı giriş kilidi.
+- **Yönetim merkezi:** Kontrol Merkezi, Oyuncular (coin, sustur, masadan çıkar,
+  askıya al, yasakla, rol, uyarı, not, ad/şifre sıfırlama), Canlı Masalar,
+  Ekonomi & Finans, Market, Siparişler & Ödeme, Sistem & Güvenlik
+  (yöneticiler, şifre değiştirme, denetim kaydı), Marka & Oyun.
 
-Şu an veriler tarayıcı içinde botlarla çalışan bir benzetimdir.
-Ayrıntılı geçiş planı ve sonraki adımlar: [`docs/GECIS_PLANI.md`](docs/GECIS_PLANI.md).
+API ayrıntıları: [`docs/API.md`](docs/API.md) · Geçiş planı: [`docs/GECIS_PLANI.md`](docs/GECIS_PLANI.md)
 
 Yazı tipi: Manrope, SIL Open Font License 1.1 (`assets/fonts/OFL.txt`).
 
-## Ekran görüntüleri
+## Ekran görüntüleri (gerçek sunucuyla, iki oyuncu)
 
-| Masa (telefon) | Masa (masaüstü) |
+| Masa (masaüstü, 3 sütun) | Masa (telefon) |
 |---|---|
-| ![](docs/ekran/masa-telefon.png) | ![](docs/ekran/masa-masaustu.png) |
+| ![](docs/ekran/masa-masaustu.png) | ![](docs/ekran/masa-telefon.png) |
 
 | Kontrol Merkezi | Canlı Masalar |
 |---|---|

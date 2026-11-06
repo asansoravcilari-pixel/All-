@@ -1,4 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+
+import 'admin_client.dart';
 
 import '../ui/theme.dart';
 
@@ -175,3 +179,129 @@ Future<bool> confirm(BuildContext context, String text, {String ok = 'Onayla', b
 
 void toast(BuildContext context, String text) =>
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text), duration: const Duration(seconds: 2)));
+
+// ---------------------------------------------------------------------------
+// Sunucudan veri yükleme
+// ---------------------------------------------------------------------------
+
+typedef Json = Map<String, dynamic>;
+
+int jn(Object? v) => v is num ? v.toInt() : (int.tryParse('$v') ?? 0);
+List<Json> jl(Object? v) => v is List ? [for (final x in v) if (x is Map) x.cast<String, dynamic>()] : const [];
+DateTime? jd(Object? v) => v == null ? null : DateTime.tryParse('$v')?.toLocal();
+
+/// Bir uç noktayı yükler, isteğe bağlı olarak periyodik yeniler.
+class ApiView extends StatefulWidget {
+  const ApiView({super.key, required this.load, required this.builder, this.refresh});
+  final Future<Json> Function(AdminClient admin) load;
+  final Widget Function(BuildContext context, Json data, VoidCallback reload) builder;
+  final Duration? refresh;
+
+  @override
+  State<ApiView> createState() => _ApiViewState();
+}
+
+class _ApiViewState extends State<ApiView> {
+  Json? _data;
+  String? _error;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+    if (widget.refresh != null) _timer = Timer.periodic(widget.refresh!, (_) => _reload());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _reload() async {
+    try {
+      final d = await widget.load(AdminScope.read(context));
+      if (mounted) {
+        setState(() {
+          _data = d;
+          _error = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_data == null) {
+      return Center(
+        child: _error == null
+            ? const CircularProgressIndicator()
+            : Column(mainAxisSize: MainAxisSize.min, children: [
+                Text(_error!, style: const TextStyle(color: SpectreColors.red)),
+                TextButton(onPressed: _reload, child: const Text('Tekrar dene')),
+              ]),
+      );
+    }
+    return widget.builder(context, _data!, _reload);
+  }
+}
+
+/// Bir yönetim işlemini çalıştırır; hata ya da başarıyı bildirir.
+Future<bool> act(BuildContext context, Future<Object?> Function() f, {String? ok, VoidCallback? then}) async {
+  try {
+    await f();
+    if (ok != null && context.mounted) toast(context, ok);
+    then?.call();
+    return true;
+  } catch (e) {
+    if (context.mounted) toast(context, '$e');
+    return false;
+  }
+}
+
+String tl(int kurus) {
+  final neg = kurus < 0;
+  final s = (kurus.abs() / 100).toStringAsFixed(2);
+  final parts = s.split('.');
+  final buf = StringBuffer();
+  final int0 = parts[0];
+  for (var i = 0; i < int0.length; i++) {
+    if (i > 0 && (int0.length - i) % 3 == 0) buf.write('.');
+    buf.write(int0[i]);
+  }
+  return '${neg ? '-' : ''}₺$buf,${parts[1]}';
+}
+
+String statusLabel(String s) => switch (s) {
+      'active' => 'Aktif',
+      'muted' => 'Susturuldu',
+      'suspended' => 'Askıda',
+      'banned' => 'Yasaklı',
+      _ => s,
+    };
+
+String roleLabel(String r) => switch (r) {
+      'player' => 'Oyuncu',
+      'vip' => 'VIP',
+      'moderator' => 'Moderatör',
+      _ => r,
+    };
+
+String orderStatusLabel(String s) => switch (s) {
+      'pending' => 'Bekliyor',
+      'paid' => 'Ödendi',
+      'failed' => 'Başarısız',
+      'refunded' => 'İade',
+      'cancelled' => 'İptal',
+      _ => s,
+    };
+
+String providerLabel(String p) => switch (p) {
+      'paytr' => 'PayTR',
+      'shopier' => 'Shopier',
+      'manual' => 'Havale/EFT',
+      _ => p,
+    };
