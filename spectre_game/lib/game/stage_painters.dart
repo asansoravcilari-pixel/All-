@@ -341,3 +341,101 @@ class TimerRingPainter extends CustomPainter {
   @override
   bool shouldRepaint(TimerRingPainter oldDelegate) => oldDelegate.progress != progress || oldDelegate.color != color;
 }
+
+/// Kare masa zemini: merkezde yumuşak ışık, hedefe doğru ışın.
+class SquareFloorPainter extends CustomPainter {
+  SquareFloorPainter({required this.theme, required this.center, required this.target, required this.time});
+  final TableTheme theme;
+  final Offset center;
+  final Offset? target;
+  final double time;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = size.shortestSide * 0.56;
+    // Merkez ışığı (v39: radial-gradient #0a1e2a 8% → saydam 56%)
+    canvas.drawCircle(
+      center,
+      r,
+      Paint()
+        ..shader = RadialGradient(colors: [
+          Color.lerp(const Color(0xFF0A1E2A), theme.primary, 0.12)!.withOpacity(0.95),
+          theme.primary.withOpacity(0.05),
+          Colors.transparent,
+        ], stops: const [0.08, 0.6, 1]).createShader(Rect.fromCircle(center: center, radius: r)),
+    );
+    // Hafif nefes alan halka
+    final pulse = 0.5 + 0.5 * math.sin(time * 1.6);
+    canvas.drawCircle(
+      center,
+      size.shortestSide * (0.17 + 0.006 * pulse),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = theme.primary.withOpacity(0.18 + 0.1 * pulse),
+    );
+    final t = target;
+    if (t != null) {
+      final dir = (t - center);
+      final len = dir.distance;
+      final n = Offset(-dir.dy, dir.dx) / len;
+      final w = size.shortestSide * 0.06;
+      final beam = Path()
+        ..moveTo(center.dx, center.dy)
+        ..lineTo(t.dx + n.dx * w, t.dy + n.dy * w)
+        ..lineTo(t.dx - n.dx * w, t.dy - n.dy * w)
+        ..close();
+      final glow = 0.5 + 0.5 * math.sin(time * 6);
+      canvas.drawPath(
+        beam,
+        Paint()
+          ..shader = LinearGradient(colors: [
+            SpectreColors.pink.withOpacity(0),
+            SpectreColors.pink.withOpacity(0.18 + 0.12 * glow),
+          ]).createShader(Rect.fromPoints(center, t)),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(SquareFloorPainter oldDelegate) =>
+      oldDelegate.time != time || oldDelegate.target != target || oldDelegate.center != center || oldDelegate.theme != theme;
+}
+
+/// Köşeleri yuvarlatılmış koltuk çevresinde süre çerçevesi.
+class RoundedTimerPainter extends CustomPainter {
+  RoundedTimerPainter({required this.progress, required this.color, required this.radius});
+  final double progress;
+  final Color color;
+  final double radius;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect = RRect.fromRectAndRadius((Offset.zero & size).inflate(3), Radius.circular(radius + 3));
+    final path = Path()..addRRect(rrect);
+    final metric = path.computeMetrics().first;
+    final c = progress < 0.25 ? SpectreColors.red : color;
+    // üst ortadan başlasın
+    final start = metric.length * 0.125;
+    final len = metric.length * progress.clamp(0.0, 1.0);
+    final seg = Path();
+    if (start + len <= metric.length) {
+      seg.addPath(metric.extractPath(start, start + len), Offset.zero);
+    } else {
+      seg
+        ..addPath(metric.extractPath(start, metric.length), Offset.zero)
+        ..addPath(metric.extractPath(0, start + len - metric.length), Offset.zero);
+    }
+    canvas.drawPath(
+      seg,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..strokeCap = StrokeCap.round
+        ..color = c,
+    );
+  }
+
+  @override
+  bool shouldRepaint(RoundedTimerPainter oldDelegate) => oldDelegate.progress != progress || oldDelegate.color != color;
+}

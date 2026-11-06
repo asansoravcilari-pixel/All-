@@ -81,6 +81,13 @@ class SpectreServer {
   Future<void> start({int port = 8080, InternetAddress? address, String? adminUser, String? adminPassword}) async {
     await store.load();
     rules.apply(store.rules);
+    if (store.rooms.isEmpty) {
+      // Projedeki varsayılan masalar (baglantilar.json → aktif_masalar).
+      for (var i = 1; i <= 4; i++) {
+        store.rooms.add(RoomRec(id: '$i', name: 'Masa $i', theme: (i - 1) % 4));
+      }
+      store.markDirty();
+    }
     for (final r in store.rooms) {
       _mountTable(r);
     }
@@ -653,6 +660,8 @@ class SpectreServer {
         tableOf(u.id)?.react(u.id, '${msg['emoji'] ?? ''}');
       case Op.gift:
         _gift(c, u, msg, now);
+      case Op.giftAll:
+        _giftAll(c, u, msg, now);
       default:
         _err(c, 'Bilinmeyen işlem');
     }
@@ -686,6 +695,41 @@ class SpectreServer {
       }
       _toUser(rec.id, Ev.me, meJson(rec));
     }
+    _toUser(u.id, Ev.me, meJson(u));
+  }
+
+  /// Toplu hediye: masadaki herkese (kendisi hariç) aynı hediye.
+  void _giftAll(_Client c, UserRec u, Map<String, dynamic> msg, DateTime now) {
+    if (!rules.giftsEnabled) return _err(c, 'Hediyeler şu an kapalı');
+    final t = tableOf(u.id);
+    if (t == null) return _err(c, 'Önce masaya otur');
+    final g = store.gifts.where((g) => g['id'] == msg['giftId'] && g['enabled'] != false).firstOrNull;
+    if (g == null) return _err(c, 'Hediye bulunamadı');
+    final gift = GiftInfo.fromJson(g);
+    final targets = [for (final s in t.seats) if (s.player != null && s.player!.userId != u.id) s.index];
+    if (targets.isEmpty) return _err(c, 'Masada başka oyuncu yok');
+    final total = gift.price * targets.length;
+    if (u.coins < total) return _err(c, 'Yetersiz coin (gereken: $total)');
+    c.giftTimes.removeWhere((x) => now.difference(x).inSeconds >= 60);
+    if (c.giftTimes.length >= store.settings.maxGiftsPerMinute) return _err(c, 'Çok hızlı hediye gönderiyorsunuz');
+    c.giftTimes.add(now);
+    for (final seat in targets) {
+      final to = t.seats[seat].player!;
+      if (!t.deliverGift(u.id, seat, gift)) continue;
+      u.coins -= gift.price;
+      u.giftsSent++;
+      final rec = store.users[to.userId];
+      if (rec != null) {
+        rec.giftsReceived++;
+        final share = (gift.price * 0.1).round();
+        if (share > 0) {
+          rec.coins += share;
+          store.addLedger(LedgerRec(rec.id, 'giftIncome', share, '${gift.name} ← ${u.displayName}'));
+        }
+        _toUser(rec.id, Ev.me, meJson(rec));
+      }
+    }
+    store.addLedger(LedgerRec(u.id, 'gift', -total, 'Toplu ${gift.name} × ${targets.length}'));
     _toUser(u.id, Ev.me, meJson(u));
   }
 

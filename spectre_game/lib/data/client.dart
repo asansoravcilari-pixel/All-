@@ -319,6 +319,7 @@ class SpectreClient extends ChangeNotifier {
   void say(String text) => _send({'op': Op.chat, 'text': text});
   void react(String emoji) => _send({'op': Op.react, 'emoji': emoji});
   void sendGift(int toSeat, GiftInfo g) => _send({'op': Op.gift, 'toSeat': toSeat, 'giftId': g.id});
+  void sendGiftAll(GiftInfo g) => _send({'op': Op.giftAll, 'giftId': g.id});
 
   // ---------------------------------------------------------------------------
   // Market

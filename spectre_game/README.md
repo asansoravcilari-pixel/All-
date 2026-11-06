@@ -29,7 +29,7 @@ SPECTRE_ADMIN_USER=admin SPECTRE_ADMIN_PASSWORD='en-az-8-karakter' \
 Tarayıcıda `http://localhost:8090` açın.
 
 1. Menü → **Yönetim merkezi** → kullanıcı adı + şifre ile giriş.
-2. **Canlı Masalar → Masa aç** ile masaları oluşturun.
+2. `Masa 1`–`Masa 4` hazır gelir; **Canlı Masalar** bölümünden yenilerini açabilirsiniz.
 3. **Market** bölümünden hediye kataloğunu ve coin paketlerini ekleyin.
 4. Oyuncular **Kayıt ol** (kullanıcı adı + şifre) ya da misafir girişiyle oynar.
 
@@ -39,18 +39,25 @@ Tarayıcıda `http://localhost:8090` açın.
 ## Testler
 
 ```bash
-cd packages/spectre_core && dart test     # oyun kuralları (7)
+cd packages/spectre_core && dart test     # oyun kuralları (8)
 cd server && dart test                    # gerçek HTTP + WebSocket uçtan uca (5)
 flutter test                              # istemci masa durumu (4)
 ```
 
 ## Neler var
 
-- **Masa:** 12 koltuk, vektörel şişe, yavaşlayarak duran dönüş, hedef ışını,
-  süre halkası, kabul/pas, sohbet balonları, uçan hediye, tepkiler, eşleşme
-  efekti, bağlantısı kopan oyuncu soluk görünür.
-  Masaüstü üç sütun (oyuncu listesi | masa | sohbet), tablet iki sütun,
-  telefon tek sütun + açılır sohbet.
+- **Masa (v39 yapısı):** 12 koltuk kare düzende — üstte 4, solda 2, sağda 2,
+  altta 4; köşeleri yuvarlatılmış kare fotoğraf ve altında isim; ortada şişe,
+  tur durumu ve tur düğmeleri (Otur / ÇEVİR / Pas–Kabul).
+  Telefonda yukarıdan aşağı: üst bilgi çubuğu (masa adı/tur, kalp, doluluk,
+  coin ＋) · araç düğmeleri (masa seçimi, bonus, market, profil, bildirimler,
+  çıkış) · masa · Masa Sohbeti (genişletilebilir) · mesaj satırı (tepki,
+  hediye, toplu hediye, gönder) · bağlantı durumu.
+  Masaüstünde aynı sütun ortada; solda masadakiler, sağda sohbet.
+  Efektler: yavaşlayarak duran dönüş, hedef ışını, süre çerçevesi, uçan
+  hediye, tepkiler, eşleşme; bağlantısı kopan oyuncu soluk görünür.
+- **Masalar:** ilk açılışta projedeki `Masa 1`–`Masa 4` oluşturulur; yönetim
+  merkezinden eklenir/yeniden adlandırılır.
 - **Sunucu yetkili:** Tur zamanlayıcısı, hedef seçimi, coin düşümü sunucuda.
   Hız sınırları, yasaklı kelime, IP engeli, hatalı giriş kilidi.
 - **Yönetim merkezi:** Kontrol Merkezi, Oyuncular (coin, sustur, masadan çıkar,
@@ -64,7 +71,7 @@ Yazı tipi: Manrope, SIL Open Font License 1.1 (`assets/fonts/OFL.txt`).
 
 ## Ekran görüntüleri (gerçek sunucuyla, iki oyuncu)
 
-| Masa (masaüstü, 3 sütun) | Masa (telefon) |
+| Masa (masaüstü) | Masa (telefon, v39 yapısı) |
 |---|---|
 | ![](docs/ekran/masa-masaustu.png) | ![](docs/ekran/masa-telefon.png) |
 

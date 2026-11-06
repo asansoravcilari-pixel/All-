@@ -103,7 +103,9 @@ void main() {
 
     // Oda listesi
     final (_, list) = await call('GET', '/room/api/v1/room', token: t1);
-    expect((list['items'] as List).single['gameType'], 'bottle');
+    final names = [for (final r in list['items'] as List) r['name']];
+    expect(names, containsAll(['Masa 1', 'Masa 2', 'Masa 3', 'Masa 4', 'Neon']));
+    expect((list['items'] as List).every((r) => r['gameType'] == 'bottle' && r['capacity'] == 12), isTrue);
 
     final w1 = await WsProbe.connect(t1);
     final w2 = await WsProbe.connect(t2);
@@ -144,7 +146,13 @@ void main() {
 
     // Admin: masa listesinde iki oyuncu görünür
     final (_, rooms) = await call('GET', '/admin/api/v1/rooms', token: admin);
-    expect((rooms['items'] as List).single['countInGamePlayers'], 2);
+    expect((rooms['items'] as List).firstWhere((r) => r['id'] == roomId)['countInGamePlayers'], 2);
+
+    // Toplu hediye: masadaki diğer herkese
+    w1.send({'op': 'giftAll', 'giftId': gift['id']});
+    await w2.next(Ev.gift);
+    final me2 = await w1.next(Ev.me);
+    expect(me2['coins'], 200 - 10 - 10);
 
     // Admin: yasakla → masadan kalkar, seat.vacated yayınlanır, giriş reddedilir
     final (bs, _) = await call('POST', '/admin/api/v1/users/$id2/action', token: admin, body: {'action': 'status', 'status': 'banned'});

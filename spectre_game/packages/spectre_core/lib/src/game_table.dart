@@ -141,8 +141,14 @@ class GameTable {
     return null;
   }
 
-  /// Koltuğun masa merkezine göre açısı (0 = üst, saat yönünde artar).
-  static double seatAngle(int index, [int count = kSeatCount]) => -math.pi / 2 + index * 2 * math.pi / count;
+  /// Koltuğun masa merkezine göre ekran açısı (radyan; 0 = sağ, saat yönünde artar).
+  /// Kare düzende gerçek koltuk konumundan hesaplanır.
+  static double seatAngle(int index, [int count = kSeatCount]) {
+    final (sx, sy) = seatCenter(index);
+    final (cx, cy) = kStageCenter;
+    // Yükseklik oranını piksele çevir (genişlik = 1).
+    return math.atan2((sy - cy) / kStageAspect, sx - cx);
+  }
 
   Duration get _phaseTotal => switch (phase) {
         RoundPhase.idle => rules.spinTimeout,
@@ -277,7 +283,7 @@ class GameTable {
       delta += 2 * math.pi;
     }
     final turns = 4 + _rnd.nextInt(3);
-    final jitter = (_rnd.nextDouble() - 0.5) * (2 * math.pi / kSeatCount) * 0.35;
+    final jitter = (_rnd.nextDouble() - 0.5) * 0.08;
     fromAngle = bottleAngle;
     bottleAngle = bottleAngle + delta + turns * 2 * math.pi + jitter;
     targetSeat = target;

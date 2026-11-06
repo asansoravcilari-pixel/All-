@@ -15,7 +15,9 @@ bölümleri taşınmaz.
 | Electric-blue palet | `v38/electric-blue-v38.css` | `lib/ui/theme.dart` |
 | Manrope yazı tipi (OFL) | `v38/manrope-variable-v38.ttf` | `assets/fonts/Manrope-*.ttf` |
 | Cam yüzeyler | `spectre-modern.css` | `GlassPanel`, `PressButton` |
-| 12 koltuk + ortada şişe | `spectre-masa.html` | `TableStage` |
+| 12 koltuk kare düzen (4 üst, 2+2 yan, 4 alt) + ortada şişe | `spectre-masa.html` (`.seat[data-pos]`) | `TableStage`, `kSeatOrigins` |
+| Mobil masa yapısı: üst çubuk · araç düğmeleri · masa · sohbet · mesaj satırı · bağlantı | `spectre-masa.html` | `TableScreen` |
+| Masa adları `Masa 1`–`Masa 4` | `baglantilar.json` | sunucu ilk açılış |
 | Masaüstünde çok sütun | `spectre-modern.css` (≥1100 px) | `TableScreen` (≥1200 px üç, ≥900 px iki sütun) |
 
 ## Admin bölümleri eşlemesi

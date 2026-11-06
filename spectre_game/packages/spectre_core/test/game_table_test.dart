@@ -32,7 +32,7 @@ void main() {
     expect(t.targetSeat, 3);
     final expected = GameTable.seatAngle(3) + math.pi / 2;
     final diff = ((t.bottleAngle - expected) % (2 * math.pi) + 2 * math.pi) % (2 * math.pi);
-    expect(math.min(diff, 2 * math.pi - diff), lessThan(math.pi / 12));
+    expect(math.min(diff, 2 * math.pi - diff), lessThan(0.05));
   });
 
   test('tam tur: çevir → karar → eşleşme → sıra hedefe geçer', () {
@@ -82,6 +82,28 @@ void main() {
     expect(t.seatOf('b'), isNull);
     expect(events.whereType<SeatVacated>().single.index, 4);
     expect(t.leftAt['b'], now);
+  });
+
+  test('kare düzen: her koltuğun açısı farklı ve şişe en yakın koltuğu gösterir', () {
+    final angles = [for (var i = 0; i < kSeatCount; i++) GameTable.seatAngle(i)];
+    for (var i = 0; i < kSeatCount; i++) {
+      final a = angles[i];
+      var best = -1;
+      var bestDiff = 99.0;
+      for (var j = 0; j < kSeatCount; j++) {
+        final d = ((angles[j] - a + math.pi) % (2 * math.pi) - math.pi).abs();
+        if (d < bestDiff) {
+          bestDiff = d;
+          best = j;
+        }
+      }
+      expect(best, i);
+    }
+    // Sol üst köşe sol-yukarı, sağ alt köşe sağ-aşağı yönünde
+    expect(math.cos(angles[0]), lessThan(0));
+    expect(math.sin(angles[0]), lessThan(0));
+    expect(math.cos(angles[11]), greaterThan(0));
+    expect(math.sin(angles[11]), greaterThan(0));
   });
 
   test('kilitli masaya oturulamaz', () {

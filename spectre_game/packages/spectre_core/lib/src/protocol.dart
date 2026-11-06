@@ -14,6 +14,33 @@
 /// Masa başına koltuk sayısı (index 0..11).
 const int kSeatCount = 12;
 
+/// Masa sahnesinin en/boy oranı (genişlik / yükseklik).
+const double kStageAspect = 1080 / 1138;
+
+/// Kare masa düzeni: üstte 4, solda 2, sağda 2, altta 4 koltuk.
+/// Her koltuğun sol-üst köşesi (sahne genişliği/yüksekliği oranı olarak).
+/// Koltuk fotoğrafı sahne genişliğinin [kSeatWidth] kadarı genişliğinde karedir.
+const List<(double, double)> kSeatOrigins = [
+  (0.014, 0.042), (0.267, 0.042), (0.520, 0.042), (0.773, 0.042), // 0-3 üst sıra
+  (0.014, 0.270), (0.773, 0.270), // 4 sol, 5 sağ
+  (0.014, 0.495), (0.773, 0.495), // 6 sol, 7 sağ
+  (0.014, 0.714), (0.267, 0.714), (0.520, 0.714), (0.773, 0.714), // 8-11 alt sıra
+];
+
+const double kSeatWidth = 0.22;
+
+/// Koltuk fotoğrafı, koltuk alanının bu oranı kadar (altında isim için yer kalır).
+const double kSeatFace = kSeatWidth * 0.82;
+
+/// Şişenin durduğu masa merkezi (sahne oranı).
+const (double, double) kStageCenter = (0.5, 0.4824);
+
+/// Koltuk fotoğrafının merkezi (sahne oranı).
+(double, double) seatCenter(int i) {
+  final (x, y) = kSeatOrigins[i];
+  return (x + kSeatWidth / 2, y + kSeatFace / 2 * kStageAspect);
+}
+
 String roomChannel(String roomId) => 'room$roomId';
 
 enum RoundPhase { idle, spinning, deciding, result }
@@ -348,5 +375,6 @@ abstract final class Op {
   static const chat = 'chat';
   static const react = 'react';
   static const gift = 'gift';
+  static const giftAll = 'giftAll';
   static const ping = 'ping';
 }
