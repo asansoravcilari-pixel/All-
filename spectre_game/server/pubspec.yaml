@@ -8,6 +8,7 @@ environment:
 
 dependencies:
   crypto: ^3.0.3
+  mailer: ^6.1.0
   spectre_core:
     path: ../packages/spectre_core
 

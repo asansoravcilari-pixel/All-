@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:spectre_core/spectre_core.dart';
 import 'package:spectre_server/spectre_server.dart';
 import 'package:test/test.dart';
@@ -316,5 +317,179 @@ void main() {
     await call('PUT', '/admin/api/v1/settings', token: admin, body: {'settings': {'endpoints': <String, String>{}}});
     final (_, cfg2) = await call('GET', '/api/v1/config');
     expect((cfg2['endpoints'] as Map)['roomList'], '/room/api/v1/room');
+  });
+
+  group('ticaret, mail ve destek', () {
+    late String admin;
+    final sent = <(String, String, String)>[]; // (alıcı, konu, html)
+
+    setUp(() async {
+      final (_, a) = await call('POST', '/admin/api/v1/login', body: {'username': 'patron', 'password': 'cok-gizli-123'});
+      admin = a['token'] as String;
+      server.mailSender = (c, to, subject, html) async => sent.add((to, subject, html));
+      await call('PUT', '/admin/api/v1/settings', token: admin, body: {
+        'settings': {'mailEnabled': true, 'smtpHost': 'smtp.ornek', 'mailFrom': 'oyun@ornek.com', 'publicBaseUrl': 'https://oyun.ornek.com'}
+      });
+    });
+
+    String linkIn(String html) => RegExp(r'href="([^"]+)"').firstMatch(html)!.group(1)!.replaceAll('&amp;', '&');
+
+    test('kayıt e-postası, doğrulama ve şifremi unuttum akışı', () async {
+      sent.clear();
+      final (st, r) = await call('POST', '/api/v1/auth/register',
+          body: {'username': 'mailci', 'password': 'sifre-1111', 'email': 'Mailci@Ornek.com'});
+      expect(st, 200);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(sent.single.$1, 'mailci@ornek.com');
+      expect(sent.single.$2, contains('hoş geldin'));
+      // Doğrulama bağlantısı
+      final verify = Uri.parse(linkIn(sent.single.$3));
+      expect(verify.path, '/eposta-dogrula');
+      final c = HttpClient();
+      final vres = await (await c.getUrl(Uri.parse('$base/eposta-dogrula?token=${verify.queryParameters['token']}'))).close();
+      expect(vres.statusCode, 200);
+      await vres.drain<void>();
+      final (_, me) = await call('GET', '/api/v1/me', token: r['token'] as String);
+      expect(me['emailVerified'], isTrue);
+
+      // Şifremi unuttum
+      sent.clear();
+      final (fs, f) = await call('POST', '/api/v1/auth/forgot', body: {'email': 'mailci@ornek.com'});
+      expect(fs, 200);
+      expect(f['ok'], isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final reset = Uri.parse(linkIn(sent.single.$3));
+      expect(reset.path, '/sifre-sifirla');
+      final (rs, _) = await call('POST', '/api/v1/auth/reset', body: {'token': reset.queryParameters['token'], 'password': 'yeni-sifre-22'});
+      expect(rs, 200);
+      final (again, _) = await call('POST', '/api/v1/auth/reset', body: {'token': reset.queryParameters['token'], 'password': 'baska-sifre-3'});
+      expect(again, 400, reason: 'bağlantı tek kullanımlık');
+      final (ls, _) = await call('POST', '/api/v1/auth/login', body: {'username': 'mailci', 'password': 'yeni-sifre-22'});
+      expect(ls, 200);
+      // Var olmayan adres: aynı yanıt, mail yok
+      sent.clear();
+      final (ns, _) = await call('POST', '/api/v1/auth/forgot', body: {'email': 'yok@ornek.com'});
+      expect(ns, 200);
+      expect(sent, isEmpty);
+      c.close();
+    });
+
+    test('abonelik paketi: kilitli özellik açılır, hediye envantere girer, süre bitince kilitlenir', () async {
+      // DM özelliğini kilitle
+      await call('POST', '/admin/api/v1/features', token: admin, body: {'key': 'dm', 'locked': true});
+      final (_, gift) = await call('POST', '/admin/api/v1/gifts', token: admin, body: {'name': 'Yıldız', 'emoji': '⭐', 'price': 50});
+      final (ps, pkg) = await call('POST', '/admin/api/v1/packages', token: admin, body: {
+        'name': 'Aylık Sohbet',
+        'kind': 'subscription',
+        'priceKurus': 4999,
+        'coins': 0,
+        'periodDays': 30,
+        'features': ['dm', 'yokboyle'],
+        'gifts': [
+          {'giftId': gift['id'], 'qty': 3}
+        ],
+      });
+      expect(ps, 200);
+      expect(pkg['features'], ['dm']);
+      final (_, a) = await call('POST', '/api/v1/auth/register', body: {'username': 'abone', 'password': 'sifre-2222', 'email': 'abone@ornek.com'});
+      final (_, b) = await call('POST', '/api/v1/auth/register', body: {'username': 'karsi', 'password': 'sifre-3333'});
+      final ta = a['token'] as String;
+      final idb = (b['me'] as Map)['id'];
+
+      final (locked, err) = await call('POST', '/api/v1/dm/$idb', token: ta, body: {'text': 'selam'});
+      expect(locked, 403);
+      expect(err['error'], contains('Özel mesaj'));
+      final (_, me0) = await call('GET', '/api/v1/me', token: ta);
+      expect(me0['locked'], contains('dm'));
+
+      // Sipariş (havale) → admin onayı → hak + hediye + satın alma maili
+      sent.clear();
+      final (_, o) = await call('POST', '/api/v1/orders', token: ta, body: {'packageId': pkg['id'], 'provider': 'manual'});
+      await call('POST', '/admin/api/v1/orders/${(o['order'] as Map)['id']}/action', token: admin, body: {'action': 'approve'});
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(sent.any((m) => m.$1 == 'abone@ornek.com' && m.$2.contains('onaylandı')), isTrue);
+      final (_, me1) = await call('GET', '/api/v1/me', token: ta);
+      expect((me1['entitlements'] as Map).keys, contains('dm'));
+      expect(me1['locked'], isNot(contains('dm')));
+      expect((me1['inventory'] as Map)[gift['id']], 3);
+      final (ok, _) = await call('POST', '/api/v1/dm/$idb', token: ta, body: {'text': 'selam'});
+      expect(ok, 200);
+
+      // Süre doldu → kilit + "bitti" maili
+      sent.clear();
+      server.checkExpiry(DateTime.now().add(const Duration(days: 29)));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(sent.any((m) => m.$2.contains('bitiyor')), isTrue);
+      server.checkExpiry(DateTime.now().add(const Duration(days: 31)));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(sent.any((m) => m.$2.contains('doldu')), isTrue);
+      final (again, _) = await call('POST', '/api/v1/dm/$idb', token: ta, body: {'text': 'tekrar'});
+      expect(again, 403);
+      await call('POST', '/admin/api/v1/features', token: admin, body: {'key': 'dm', 'locked': false});
+    });
+
+    test('sanal POS bildirimi: yanlış imza reddedilir, doğru imza siparişi otomatik onaylar', () async {
+      await call('PUT', '/admin/api/v1/settings', token: admin, body: {
+        'settings': {'paytrEnabled': true, 'paytrMerchantId': '123456', 'paytrMerchantKey': 'anahtar', 'paytrMerchantSalt': 'tuz'}
+      });
+      final (_, set) = await call('GET', '/admin/api/v1/settings', token: admin);
+      expect((set['settings'] as Map).containsKey('paytrMerchantKey'), isFalse, reason: 'gizli anahtar dışarı verilmez');
+      expect((set['settings'] as Map)['paytrKeySet'], isTrue);
+
+      final (_, pkg) = await call('POST', '/admin/api/v1/packages', token: admin,
+          body: {'name': 'Kart Paketi', 'coins': 300, 'priceKurus': 2999});
+      final (_, u) = await call('POST', '/api/v1/auth/register', body: {'username': 'kartli', 'password': 'sifre-4444'});
+      final t = u['token'] as String;
+      final (_, o) = await call('POST', '/api/v1/orders', token: t, body: {'packageId': pkg['id'], 'provider': 'manual'});
+      final oid = (o['order'] as Map)['id'] as String;
+
+      Future<(int, String)> notify(String hash) async {
+        final c = HttpClient();
+        final req = await c.postUrl(Uri.parse('$base/api/v1/pay/paytr/callback'));
+        req.headers.contentType = ContentType('application', 'x-www-form-urlencoded');
+        req.write(Uri(queryParameters: {'merchant_oid': oid, 'status': 'success', 'total_amount': '2999', 'hash': hash}).query);
+        final res = await req.close();
+        final body = await utf8.decoder.bind(res).join();
+        c.close();
+        return (res.statusCode, body);
+      }
+
+      final (bad, _) = await notify('sahte');
+      expect(bad, 400);
+      final hash = base64.encode(
+          Hmac(sha256, utf8.encode('anahtar')).convert(utf8.encode('${oid}tuzsuccess2999')).bytes);
+      final (good, body) = await notify(hash);
+      expect(good, 200);
+      expect(body, 'OK');
+      final (_, me) = await call('GET', '/api/v1/me', token: t);
+      expect(me['coins'], 200 + 300);
+      final (again, _) = await notify(hash); // tekrar bildirim: çift yükleme yok
+      expect(again, 200);
+      final (_, me2) = await call('GET', '/api/v1/me', token: t);
+      expect(me2['coins'], 500);
+    });
+
+    test('destek robotu: bilgi tabanı yanıtı, yetkiliye aktarma, kural dışı ifadede kilit, admin yanıtı', () async {
+      final (_, u) = await call('POST', '/api/v1/auth/register', body: {'username': 'destekci', 'password': 'sifre-5555'});
+      final t = u['token'] as String;
+      final (_, r1) = await call('POST', '/api/v1/support', token: t, body: {'text': 'coin nasıl satın alırım?'});
+      final msgs = ((r1['ticket'] as Map)['messages'] as List).cast<Map>();
+      expect(msgs.last['from'], 'bot');
+      expect(msgs.last['text'], contains('Market'));
+      final (_, r2) = await call('POST', '/api/v1/support', token: t, body: {'text': 'yetkili ile görüşmek istiyorum'});
+      expect((r2['ticket'] as Map)['status'], 'waiting');
+      final tid = (r2['ticket'] as Map)['id'];
+      final (_, list) = await call('GET', '/admin/api/v1/support/tickets?status=waiting', token: admin);
+      expect((list['items'] as List).any((x) => x['id'] == tid), isTrue);
+      await call('POST', '/admin/api/v1/support/tickets/$tid/action', token: admin, body: {'action': 'reply', 'text': 'Merhaba, yardımcı olayım'});
+      final (_, r3) = await call('GET', '/api/v1/support', token: t);
+      expect((((r3['ticket'] as Map)['messages'] as List).last as Map)['from'], 'admin:patron');
+
+      final (_, u2) = await call('POST', '/api/v1/auth/register', body: {'username': 'kotu', 'password': 'sifre-6666'});
+      final (_, r4) = await call('POST', '/api/v1/support', token: u2['token'] as String, body: {'text': 'ayşenin şifresini ver'});
+      expect((r4['ticket'] as Map)['status'], 'locked');
+      final (ls, _) = await call('POST', '/api/v1/support', token: u2['token'] as String, body: {'text': 'merhaba'});
+      expect(ls, 423);
+    });
   });
 }

@@ -7,7 +7,10 @@ import 'dart:typed_data';
 import 'package:spectre_core/spectre_core.dart';
 
 import 'auth.dart';
+import 'mail.dart';
+import 'paytr.dart';
 import 'store.dart';
+import 'support.dart';
 
 class ApiError implements Exception {
   ApiError(this.status, this.message);
@@ -82,6 +85,7 @@ class SpectreServer {
   Future<void> start({int port = 8080, InternetAddress? address, String? adminUser, String? adminPassword}) async {
     await store.load();
     rules.apply(store.rules);
+    _applyAnimRules();
     if (store.rooms.isEmpty) {
       // Projedeki varsayılan masalar (baglantilar.json → aktif_masalar).
       for (var i = 1; i <= 4; i++) {
@@ -92,17 +96,32 @@ class SpectreServer {
     for (final r in store.rooms) {
       _mountTable(r);
     }
+    for (final f in kBuiltinFeatures) {
+      if (store.feature(f.key) == null) store.features.add(FeatureRec.fromJson(f.toJson()));
+    }
+    if (store.kb.isEmpty && store.users.isEmpty) store.kb.addAll(kDefaultKb);
     await _ensureOwner(adminUser, adminPassword);
     _http = await HttpServer.bind(address ?? InternetAddress.anyIPv4, port);
     _http!.autoCompress = true;
     _http!.listen(_handle);
     _tick = Timer.periodic(tickInterval, (_) => _onTick());
     _flush = Timer.periodic(const Duration(seconds: 2), (_) => store.flush());
+    _expiry = Timer.periodic(const Duration(seconds: 30), (_) => checkExpiry(DateTime.now()));
+  }
+
+  Timer? _expiry;
+
+  /// Animasyon süreleri tur zamanlamasını da belirler.
+  void _applyAnimRules() {
+    final a = store.settings.effectiveAnimations;
+    rules.spinDuration = Duration(milliseconds: ((a['spinMs'] as num?) ?? 3400).toInt().clamp(1500, 10000));
+    rules.resultDuration = Duration(milliseconds: ((a['resultMs'] as num?) ?? 2200).toInt().clamp(800, 8000));
   }
 
   Future<void> stop() async {
     _tick?.cancel();
     _flush?.cancel();
+    _expiry?.cancel();
     for (final c in List.of(_clients)) {
       c.close();
     }
@@ -181,7 +200,8 @@ class SpectreServer {
         _toChannel(ch, Ev.chat, line.toJson());
         if (!line.system && store.settings.translateEnabled) {
           final langs = {
-            for (final p in t.players) store.users[p.userId]?.lang ?? 'tr',
+            for (final p in t.players)
+              if (store.users[p.userId] case final u? when allowed(u, 'translate')) u.lang,
           };
           _translateFor(line.text, langs).then((tr) {
             if (tr.isEmpty) return;
@@ -267,6 +287,9 @@ class SpectreServer {
       if (path == eps['ws'] || path == '/ws') return await _upgrade(req);
       if (path.startsWith('/admin/api/')) return await _json(req, await _admin(req));
       if (path.startsWith('/uploads/')) return await _upload(req);
+      if (path == '/eposta-dogrula') return await _verifyPage(req);
+      if (path == '/sifre-sifirla') return await _resetPage(req);
+      if (path == '/api/v1/pay/paytr/callback' && req.method == 'POST') return await _paytrCallback(req);
       if (path == '/api/v1/config' || path == '/api/v1/health') return await _json(req, await _public(req, path, const {}));
       final route = _match(path, eps);
       if (route != null) return await _json(req, await _public(req, route.$1, route.$2));
@@ -373,7 +396,25 @@ class SpectreServer {
         'canClaimDaily': _canClaimDaily(u),
         'unreadNotices': store.unreadNotices(u.id),
         'unreadDms': store.unreadDms(u.id),
+        'email': u.email,
+        'emailVerified': u.emailVerified,
+        'entitlements': {
+          for (final e in u.entitlements.entries)
+            if (DateTime.now().isBefore(e.value)) e.key: e.value.toIso8601String(),
+        },
+        'locked': [for (final f in store.features) if (!allowed(u, f.key)) f.key],
+        'features': {for (final f in store.features) f.key: f.name},
+        'inventory': {for (final e in u.inventory.entries) if (e.value > 0) e.key: e.value},
       };
+
+  /// Kullanıcı bu özelliği kullanabilir mi? (Kilitli değilse herkes; kilitliyse hakkı olan.)
+  bool allowed(UserRec u, String key) {
+    final f = store.feature(key);
+    if (f == null || !f.locked) return true;
+    return u.has(key);
+  }
+
+  String _lockedMsg(String key) => '${store.feature(key)?.name ?? key} paketinde yok — Market\'ten açabilirsin';
 
   Map<String, dynamic> publicUser(UserRec u) => {
         'id': u.id,
@@ -395,12 +436,13 @@ class SpectreServer {
         avatarUrl: u.avatarUrl,
         color: u.color,
         level: u.level,
-        vip: u.isVip,
+        vip: u.isVip || u.has('vipBadge'),
         hearts: u.hearts,
       );
 
-  UserRec _createUser(String username, String displayName, String password, {bool guest = false}) {
+  UserRec _createUser(String username, String displayName, String password, {bool guest = false, String email = ''}) {
     final u = UserRec(
+      email: email,
       id: store.nextId('u'),
       username: username,
       displayName: displayName,
@@ -414,6 +456,328 @@ class SpectreServer {
     if (u.coins > 0) store.addLedger(LedgerRec(u.id, 'reward', u.coins, 'Başlangıç coini'));
     store.markDirty();
     return u;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Haklar (abonelik / özellik), paket içi hediyeler, otomatik bitiş
+  // ---------------------------------------------------------------------------
+
+  static final _forever = DateTime(2100);
+
+  /// Ödenen paketin içeriğini tanımlar: coin, özellik hakları, hediyeler.
+  List<String> grantPackage(UserRec u, PackageRec pkg, {int sign = 1}) {
+    final now = DateTime.now();
+    final granted = <String>[];
+    final keys = {...pkg.features, if (pkg.vipDays > 0) 'vipBadge'};
+    for (final k in keys) {
+      final days = k == 'vipBadge' && pkg.vipDays > 0 && !pkg.features.contains(k) ? pkg.vipDays : pkg.periodDays;
+      final cur = u.entitlements[k];
+      if (sign > 0) {
+        final base = cur != null && cur.isAfter(now) ? cur : now;
+        u.entitlements[k] = days <= 0 ? _forever : base.add(Duration(days: days));
+        u.expiryWarned.removeWhere((w) => w.startsWith('$k@'));
+      } else if (cur != null) {
+        final back = days <= 0 ? now : cur.subtract(Duration(days: days));
+        if (back.isAfter(now)) {
+          u.entitlements[k] = back;
+        } else {
+          u.entitlements.remove(k);
+        }
+      }
+      granted.add(store.feature(k)?.name ?? k);
+    }
+    for (final g in pkg.gifts) {
+      final id = '${g['giftId']}';
+      final qty = (g['qty'] as num?)?.toInt() ?? 0;
+      if (qty <= 0) continue;
+      u.inventory[id] = math.max(0, (u.inventory[id] ?? 0) + sign * qty);
+    }
+    store.markDirty();
+    tableOf(u.id)?.updatePlayer(_seatPlayer(u));
+    return granted;
+  }
+
+  /// Süresi dolan hakları kaldırır, bitmeden 3 gün önce uyarır.
+  void checkExpiry(DateTime now) {
+    for (final u in store.users.values) {
+      if (u.entitlements.isEmpty) continue;
+      var changed = false;
+      for (final e in u.entitlements.entries.toList()) {
+        final name = store.feature(e.key)?.name ?? e.key;
+        if (!now.isBefore(e.value)) {
+          u.entitlements.remove(e.key);
+          changed = true;
+          _notify(u.id, 'order', '$name süren doldu');
+          _mail(u, 'expired', {'feature': name, 'expires': _date(e.value)});
+        } else if (e.value != _forever && e.value.difference(now).inDays < 3) {
+          final tag = '${e.key}@${e.value.toIso8601String()}';
+          if (u.expiryWarned.add(tag)) {
+            changed = true;
+            final days = math.max(1, e.value.difference(now).inHours ~/ 24);
+            _notify(u.id, 'order', '$name $days gün içinde bitiyor');
+            _mail(u, 'expiring', {'feature': name, 'days': '$days', 'expires': _date(e.value)});
+          }
+        }
+      }
+      if (changed) {
+        store.markDirty();
+        _toUser(u.id, Ev.me, meJson(u));
+        tableOf(u.id)?.updatePlayer(_seatPlayer(u));
+      }
+    }
+  }
+
+  static String _date(DateTime d) => d == _forever
+      ? 'süresiz'
+      : '${d.day.toString().padLeft(2, '0')}.${d.month.toString().padLeft(2, '0')}.${d.year} '
+          '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
+
+  // ---------------------------------------------------------------------------
+  // Mail
+  // ---------------------------------------------------------------------------
+
+  /// Test için gönderim yerine geçebilir.
+  Future<void> Function(MailConfig c, String to, String subject, String html)? mailSender;
+
+  MailConfig get _mailConfig {
+    final s = store.settings;
+    return MailConfig(
+      host: s.smtpHost,
+      port: s.smtpPort,
+      security: s.smtpSecurity,
+      user: s.smtpUser,
+      password: s.smtpPassword,
+      from: s.mailFrom,
+      fromName: s.mailFromName,
+    );
+  }
+
+  Map<String, String> templateOf(String key) => {
+        ...?kDefaultMailTemplates[key],
+        ...?store.settings.mailTemplates[key],
+      };
+
+  Future<bool> sendTemplate(String to, String key, Map<String, String> vars) async {
+    final s = store.settings;
+    final tpl = templateOf(key);
+    final all = {'brand': s.brandName, 'site': s.publicBaseUrl, ...vars};
+    final subject = renderTemplate(tpl['subject'] ?? '', all);
+    final html = renderTemplate(tpl['body'] ?? '', all, html: true);
+    final entry = <String, dynamic>{'at': DateTime.now().toIso8601String(), 'to': to, 'template': key, 'subject': subject};
+    try {
+      final sender = mailSender;
+      if (sender != null) {
+        await sender(_mailConfig, to, subject, html);
+      } else {
+        await sendMail(_mailConfig, to: to, subject: subject, html: html);
+      }
+      entry['ok'] = true;
+      return true;
+    } catch (e) {
+      entry['ok'] = false;
+      entry['error'] = '$e'.length > 200 ? '$e'.substring(0, 200) : '$e';
+      return false;
+    } finally {
+      store.mailLog.add(entry);
+      if (store.mailLog.length > 300) store.mailLog.removeAt(0);
+      store.markDirty();
+    }
+  }
+
+  /// Kullanıcıya şablonlu mail (mail kapalıysa ya da adres yoksa sessizce geçer).
+  void _mail(UserRec u, String key, Map<String, String> vars) {
+    if (!store.settings.mailEnabled || u.email.isEmpty) return;
+    sendTemplate(u.email, key, {'name': u.displayName, 'username': u.username, ...vars});
+  }
+
+  String _link(String path, String token) {
+    final base = store.settings.publicBaseUrl.replaceAll(RegExp(r'/+$'), '');
+    return '$base$path?token=${Uri.encodeQueryComponent(token)}';
+  }
+
+  String _newToken(UserRec u, String kind, Duration ttl) {
+    store.tokens.removeWhere((t) => t.userId == u.id && t.kind == kind);
+    final t = TokenRec(randomToken(24), u.id, kind, DateTime.now().add(ttl));
+    store.tokens.add(t);
+    store.markDirty();
+    return t.token;
+  }
+
+  TokenRec? _takeToken(String? token, String kind) {
+    if (token == null) return null;
+    final t = store.tokens.where((x) => x.token == token && x.kind == kind).firstOrNull;
+    if (t == null) return null;
+    store.tokens.remove(t);
+    store.markDirty();
+    return DateTime.now().isBefore(t.expires) ? t : null;
+  }
+
+  void _sendVerify(UserRec u, {bool welcome = false}) {
+    if (u.email.isEmpty) return;
+    final link = _link('/eposta-dogrula', _newToken(u, 'verify', const Duration(hours: 48)));
+    _mail(u, welcome ? 'welcome' : 'verify', {'link': link});
+  }
+
+  static final _emailPattern = RegExp(r'^[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,24}$');
+
+  /// Basit HTML sayfası (e-posta doğrulama / şifre sıfırlama).
+  Future<void> _page(HttpRequest req, String title, String bodyHtml, {int status = 200}) async {
+    final s = store.settings;
+    String esc(String v) => v.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    final res = req.response;
+    res.statusCode = status;
+    res.headers
+      ..contentType = ContentType.html
+      ..set('Cache-Control', 'no-store')
+      ..set('Content-Security-Policy', "default-src 'self'; style-src 'unsafe-inline'; form-action 'self'");
+    res.write('<!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>${esc(title)}</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:${esc(s.backgroundColor)};'
+        'font-family:system-ui,sans-serif;color:#eff8ff}main{background:#122737;border:1px solid #a3d4f22e;border-radius:18px;padding:28px;'
+        'width:min(92vw,380px)}h1{font-size:20px;margin:0 0 12px}input{width:100%;box-sizing:border-box;padding:12px;border-radius:10px;'
+        'border:1px solid #3e7aa1;background:#0b2843;color:#fff;margin:6px 0 12px}button{width:100%;padding:12px;border:0;border-radius:10px;'
+        'background:${esc(s.accentColor)};color:#021220;font-weight:800}a{color:${esc(s.accentColor)}}p{color:#adc6d8}</style></head>'
+        '<body><main><h1>${esc(s.brandName)} — ${esc(title)}</h1>$bodyHtml</main></body></html>');
+    await res.close();
+  }
+
+  Future<void> _verifyPage(HttpRequest req) async {
+    final t = _takeToken(req.uri.queryParameters['token'], 'verify');
+    final u = t == null ? null : store.users[t.userId];
+    if (u == null) return _page(req, 'E-posta doğrulama', '<p>Bağlantı geçersiz ya da süresi dolmuş.</p>', status: 400);
+    u.emailVerified = true;
+    store.markDirty();
+    _toUser(u.id, Ev.me, meJson(u));
+    return _page(req, 'E-posta doğrulandı', '<p>Teşekkürler ${u.displayName}, e-posta adresin doğrulandı. Oyuna dönebilirsin.</p>');
+  }
+
+  Future<void> _resetPage(HttpRequest req) async {
+    final token = req.uri.queryParameters['token'] ?? '';
+    final valid = store.tokens.any((x) => x.token == token && x.kind == 'reset' && DateTime.now().isBefore(x.expires));
+    if (req.method == 'POST') {
+      final form = Uri.splitQueryString(await utf8.decoder.bind(req).join());
+      final t = _takeToken(form['token'], 'reset');
+      final u = t == null ? null : store.users[t.userId];
+      if (u == null) return _page(req, 'Şifre sıfırlama', '<p>Bağlantı geçersiz ya da süresi dolmuş.</p>', status: 400);
+      final pe = validatePassword(form['password'] ?? '');
+      if (pe != null || form['password'] != form['password2']) {
+        final nt = _newToken(u, 'reset', const Duration(hours: 1));
+        return _page(req, 'Şifre sıfırlama',
+            '<p>${pe ?? 'Şifreler aynı değil'}</p><a href="/sifre-sifirla?token=$nt">Tekrar dene</a>', status: 400);
+      }
+      u.passwordHash = hashPassword(form['password']!);
+      _sessions.removeWhere((_, s) => !s.admin && s.subject == u.id);
+      store.securityEvent('info', 'Şifre sıfırlandı: ${u.username}');
+      store.markDirty();
+      return _page(req, 'Şifre değişti', '<p>Yeni şifrenle giriş yapabilirsin.</p><p><a href="/">Oyuna git</a></p>');
+    }
+    if (!valid) return _page(req, 'Şifre sıfırlama', '<p>Bağlantı geçersiz ya da süresi dolmuş.</p>', status: 400);
+    return _page(
+        req,
+        'Yeni şifre',
+        '<form method="post" action="/sifre-sifirla"><input type="hidden" name="token" value="${Uri.encodeQueryComponent(token)}">'
+            '<label>Yeni şifre<input type="password" name="password" minlength="8" required autocomplete="new-password"></label>'
+            '<label>Yeni şifre (tekrar)<input type="password" name="password2" minlength="8" required autocomplete="new-password"></label>'
+            '<button type="submit">Şifreyi değiştir</button></form>');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sanal POS (PayTR)
+  // ---------------------------------------------------------------------------
+
+  Paytr get _paytr {
+    final s = store.settings;
+    return Paytr(
+      merchantId: s.paytrMerchantId,
+      merchantKey: s.paytrMerchantKey,
+      merchantSalt: s.paytrMerchantSalt,
+      testMode: s.paytrTestMode,
+    );
+  }
+
+  /// PayTR ödeme bildirimi: imza doğrulanır, sipariş otomatik onaylanır.
+  Future<void> _paytrCallback(HttpRequest req) async {
+    final form = Uri.splitQueryString(await utf8.decoder.bind(req).join());
+    final oid = form['merchant_oid'] ?? '';
+    final status = form['status'] ?? '';
+    final total = form['total_amount'] ?? '';
+    final ok = _paytr.configured &&
+        _paytr.verifyCallback(merchantOid: oid, status: status, totalAmount: total, hash: form['hash'] ?? '');
+    final res = req.response;
+    res.headers.contentType = ContentType.text;
+    if (!ok) {
+      store.securityEvent('warn', 'Geçersiz PayTR bildirimi (sipariş $oid, ${_ip(req)})');
+      res.statusCode = 400;
+      res.write('PAYTR notification failed: bad hash');
+      await res.close();
+      return;
+    }
+    final o = store.orders.where((x) => x.id == oid).firstOrNull;
+    if (o != null && o.status == 'pending') {
+      if (status == 'success') {
+        _applyOrder(o, 'approve', 'paytr');
+      } else {
+        o.status = 'failed';
+        o.note = form['failed_reason_msg'] ?? '';
+        o.updatedAt = DateTime.now();
+        final u = store.users[o.userId];
+        if (u != null) _notify(u.id, 'order', 'Ödeme tamamlanamadı: ${o.packageName}');
+      }
+      store.markDirty();
+    }
+    // PayTR, yanıt "OK" olana kadar bildirimi tekrarlar.
+    res.write('OK');
+    await res.close();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Destek robotu
+  // ---------------------------------------------------------------------------
+
+  Ticket _ticketOf(UserRec u) {
+    final open = store.tickets.where((t) => t.userId == u.id && t.status != 'closed').lastOrNull;
+    if (open != null) return open;
+    final t = Ticket(id: store.nextId('t'), userId: u.id);
+    t.messages.add(TicketMsg('bot', store.settings.supportGreeting));
+    store.tickets.add(t);
+    store.markDirty();
+    return t;
+  }
+
+  String _botReply(UserRec u, Ticket t, String text) {
+    final s = store.settings;
+    final low = text.toLowerCase();
+    if (wantsHuman(text)) {
+      if (u.guest && s.supportHumanForMembersOnly) {
+        return 'Canlı desteğe yalnız üyeler bağlanabilir. Kayıt olduktan sonra tekrar yazabilirsin.';
+      }
+      t.status = 'waiting';
+      for (final a in store.admins.values) {
+        store.securityEvent('info', 'Destek talebi bekliyor: ${u.username}', actor: a.username);
+        break;
+      }
+      return 'Talebini bir yetkiliye ilettim. En kısa sürede burada yanıt verilecek.';
+    }
+    if (low.contains('abonelik') || low.contains('paketim') || low.contains('hakkım') || low.contains('haklarım')) {
+      final active = [
+        for (final e in u.entitlements.entries)
+          if (DateTime.now().isBefore(e.value)) '${store.feature(e.key)?.name ?? e.key}: ${_date(e.value)}'
+      ];
+      return active.isEmpty ? 'Şu an aktif bir paket hakkın görünmüyor.' : 'Aktif hakların:\n${active.join('\n')}';
+    }
+    if (low.contains('sipariş')) {
+      final o = store.orders.where((o) => o.userId == u.id).firstOrNull;
+      if (o == null) return 'Henüz bir siparişin yok.';
+      const st = {'pending': 'onay bekliyor', 'paid': 'ödendi', 'failed': 'başarısız', 'refunded': 'iade edildi', 'cancelled': 'iptal'};
+      return 'Son siparişin ${o.id} (${o.packageName}): ${st[o.status] ?? o.status}.';
+    }
+    if ((low.contains('şifre') || low.contains('parola')) && u.email.isNotEmpty && s.mailEnabled) {
+      final link = _link('/sifre-sifirla', _newToken(u, 'reset', const Duration(hours: 1)));
+      _mail(u, 'reset', {'link': link});
+      return 'Kayıtlı e-posta adresine şifre sıfırlama bağlantısı gönderdim.';
+    }
+    final kb = bestAnswer(store.kb, text);
+    if (kb != null) return kb.answer;
+    return 'Bunu tam anlayamadım. Başka şekilde sorabilir ya da "yetkili" yazarak bir yetkiliye bağlanabilirsin.';
   }
 
   /// İstek yolunu uç nokta haritasıyla eşleştirir: (anahtar, yol parametreleri).
@@ -554,14 +918,44 @@ class SpectreServer {
         final username = '${b['username'] ?? ''}'.trim();
         final password = '${b['password'] ?? ''}';
         final display = '${b['displayName'] ?? username}'.trim();
+        final email = '${b['email'] ?? ''}'.trim().toLowerCase();
+        if (email.isNotEmpty && !_emailPattern.hasMatch(email)) throw ApiError(400, 'Geçerli bir e-posta adresi girin');
+        if (email.isEmpty && s.requireEmail) throw ApiError(400, 'E-posta adresi gerekli');
+        if (email.isNotEmpty && store.users.values.any((x) => x.email == email)) {
+          throw ApiError(409, 'Bu e-posta adresiyle kayıtlı bir hesap var');
+        }
         if (!usernamePattern.hasMatch(username)) {
           throw ApiError(400, 'Kullanıcı adı 3–20 karakter olmalı (harf, rakam, . _ -)');
         }
         final pe = validatePassword(password);
         if (pe != null) throw ApiError(400, pe);
         if (store.userByName(username) != null) throw ApiError(409, 'Bu kullanıcı adı alınmış');
-        final u = _createUser(username, display.isEmpty ? username : _clip(display, 20), password);
+        final u = _createUser(username, display.isEmpty ? username : _clip(display, 20), password, email: email);
+        _sendVerify(u, welcome: true);
         return {'token': _issue(u.id, admin: false), 'me': meJson(u)};
+      case 'authForgot' when m == 'POST':
+        final b = await _body(req);
+        final key = 'f:$ip';
+        _throttleLogin(key);
+        _loginFailures.putIfAbsent(key, () => []).add(DateTime.now()); // kötüye kullanım sınırı
+        final q = '${b['email'] ?? b['username'] ?? ''}'.trim().toLowerCase();
+        final u = store.users.values.where((x) => x.email.isNotEmpty && (x.email == q || x.username.toLowerCase() == q)).firstOrNull;
+        if (u != null && s.mailEnabled) {
+          _mail(u, 'reset', {'link': _link('/sifre-sifirla', _newToken(u, 'reset', const Duration(hours: 1)))});
+        }
+        // Hesabın var olup olmadığı açığa çıkarılmaz.
+        return {'ok': true, 'message': 'Kayıtlı bir e-posta varsa sıfırlama bağlantısı gönderildi.'};
+      case 'authReset' when m == 'POST':
+        final b = await _body(req);
+        final t = _takeToken('${b['token'] ?? ''}', 'reset');
+        final u = t == null ? null : store.users[t.userId];
+        if (u == null) throw ApiError(400, 'Bağlantı geçersiz ya da süresi dolmuş');
+        final pe = validatePassword('${b['password'] ?? ''}');
+        if (pe != null) throw ApiError(400, pe);
+        u.passwordHash = hashPassword('${b['password']}');
+        _sessions.removeWhere((_, x) => !x.admin && x.subject == u.id);
+        store.markDirty();
+        return {'ok': true};
       case 'authLogin' when m == 'POST':
         final b = await _body(req);
         final username = '${b['username'] ?? ''}'.trim();
@@ -633,6 +1027,19 @@ class SpectreServer {
             u.displayName = _clip(d, 20);
           }
           if (b['lang'] is String && s.languages.contains(b['lang'])) u.lang = b['lang'] as String;
+          if (b['email'] is String) {
+            final email = (b['email'] as String).trim().toLowerCase();
+            if (email.isNotEmpty && !_emailPattern.hasMatch(email)) throw ApiError(400, 'Geçerli bir e-posta adresi girin');
+            if (email.isNotEmpty && store.users.values.any((x) => x.id != u.id && x.email == email)) {
+              throw ApiError(409, 'Bu e-posta adresi kullanımda');
+            }
+            if (email != u.email) {
+              u.email = email;
+              u.emailVerified = false;
+              _sendVerify(u);
+            }
+          }
+          if (b['resendVerify'] == true) _sendVerify(u);
           store.markDirty();
           tableOf(u.id)?.updatePlayer(_seatPlayer(u));
           return meJson(u);
@@ -640,6 +1047,7 @@ class SpectreServer {
       case 'meAvatar' when m == 'POST':
         final u = _requireUser(req);
         if (u.guest) throw ApiError(403, 'Fotoğraf için üye girişi gerekli');
+        if (!allowed(u, 'avatar')) throw ApiError(403, _lockedMsg('avatar'));
         u.avatarUrl = await _saveImage(req, maxBytes: 1536 * 1024);
         store.markDirty();
         tableOf(u.id)?.updatePlayer(_seatPlayer(u));
@@ -705,6 +1113,7 @@ class SpectreServer {
         }
         if (m == 'POST') {
           if (u.status == 'muted') throw ApiError(403, 'Susturuldunuz');
+          if (!allowed(u, 'dm')) throw ApiError(403, _lockedMsg('dm'));
           final b = await _body(req);
           final text = _clip('${b['text'] ?? ''}'.trim(), 500);
           if (text.isEmpty) throw ApiError(400, 'Mesaj boş');
@@ -717,7 +1126,7 @@ class SpectreServer {
           _toUser(peer.id, Ev.dm, {...j, 'unreadDm': store.unreadDms(peer.id)});
           _toUser(u.id, Ev.dm, j);
           // Alıcının diline otomatik çeviri (arka planda)
-          if (peer.lang != u.lang) {
+          if (peer.lang != u.lang && allowed(peer, 'translate')) {
             _translateFor(text, [peer.lang]).then((t) {
               if (t.isEmpty) return;
               d.translations.addAll(t);
@@ -729,6 +1138,77 @@ class SpectreServer {
           }
           return j;
         }
+
+      // --- Sanal POS ---
+      case 'payStart' when m == 'POST':
+        final u = _requireUser(req);
+        if (!s.marketOpen) throw ApiError(403, 'Market kapalı');
+        if (u.guest) throw ApiError(403, 'Satın alma için üye girişi gerekli');
+        if (!s.paytrEnabled || !_paytr.configured) throw ApiError(503, 'Kartla ödeme şu an kullanılamıyor');
+        if (s.publicBaseUrl.isEmpty) throw ApiError(503, 'Site adresi ayarlanmamış');
+        final b = await _body(req);
+        final pkg = store.packages.where((x) => x.id == b['packageId'] && x.active).firstOrNull ??
+            (throw ApiError(404, 'Paket bulunamadı'));
+        final o = OrderRec(
+          id: store.nextId('S'),
+          userId: u.id,
+          packageId: pkg.id,
+          packageName: pkg.name,
+          amountKurus: pkg.priceKurus,
+          coins: pkg.totalCoins,
+          provider: 'paytr',
+          createdAt: DateTime.now(),
+        );
+        store.orders.insert(0, o);
+        store.markDirty();
+        final base = s.publicBaseUrl.replaceAll(RegExp(r'/+$'), '');
+        try {
+          final url = await _paytr.createPayment(
+            userIp: ip,
+            merchantOid: o.id,
+            email: u.email.isNotEmpty ? u.email : '${u.username}@${Uri.parse(base).host}',
+            userName: u.displayName,
+            productName: pkg.name,
+            amountKurus: pkg.priceKurus,
+            okUrl: '$base/?odeme=basarili',
+            failUrl: '$base/?odeme=hata',
+          );
+          return {'order': o.toJson(), 'paymentUrl': url};
+        } catch (e) {
+          o.status = 'failed';
+          o.note = '$e';
+          throw ApiError(502, 'Ödeme başlatılamadı: $e');
+        }
+
+      // --- Destek ---
+      case 'support':
+        final u = _requireUser(req);
+        if (!s.supportEnabled) throw ApiError(403, 'Destek şu an kapalı');
+        final t = _ticketOf(u);
+        if (m == 'POST') {
+          if (t.locked) throw ApiError(423, 'Görüşme geçici olarak kilitlendi');
+          final b = await _body(req);
+          final text = _clip('${b['text'] ?? ''}'.trim(), 1000);
+          if (text.isEmpty) throw ApiError(400, 'Mesaj boş');
+          t.messages.add(TicketMsg('user', text));
+          final hit = safetyHit(s.supportSafetyWords, text) ?? (_blocked(text) ? 'küfür' : null);
+          if (hit != null) {
+            t.status = 'locked';
+            t.lockedUntil = DateTime.now().add(Duration(minutes: s.supportLockMinutes));
+            t.messages.add(TicketMsg('bot', 'Bu görüşme kurallara aykırı içerik nedeniyle kilitlendi.'));
+            store.securityEvent('warn', 'Destekte kural dışı ifade (${u.username}): "$hit"');
+          } else if (t.status == 'waiting' || t.status == 'answered') {
+            t.status = 'waiting';
+          } else {
+            t.messages.add(TicketMsg('bot', _botReply(u, t, text)));
+          }
+          t.updatedAt = DateTime.now();
+          store.markDirty();
+        }
+        return {
+          'botName': s.supportBotName,
+          'ticket': t.toJson(),
+        };
 
       // --- Market ---
       case 'gifts' when m == 'GET':
@@ -888,15 +1368,20 @@ class SpectreServer {
     final toSeat = msg['toSeat'] is int ? msg['toSeat'] as int : -1;
     final to = toSeat >= 0 && toSeat < kSeatCount ? t.seats[toSeat].player : null;
     if (to == null || to.userId == u.id) return _err(c, 'Geçersiz alıcı');
-    if (u.coins < gift.price) return _err(c, 'Yetersiz coin');
+    final fromInventory = (u.inventory[gift.id] ?? 0) > 0;
+    if (!fromInventory && u.coins < gift.price) return _err(c, 'Yetersiz coin');
     c.giftTimes.removeWhere((x) => now.difference(x).inSeconds >= 60);
     if (c.giftTimes.length >= store.settings.maxGiftsPerMinute) return _err(c, 'Çok hızlı hediye gönderiyorsunuz');
     c.giftTimes.add(now);
     if (!t.deliverGift(u.id, toSeat, gift)) return _err(c, 'Hediye gönderilemedi');
     final rec = store.users[to.userId];
-    u.coins -= gift.price;
+    if (fromInventory) {
+      u.inventory[gift.id] = u.inventory[gift.id]! - 1;
+    } else {
+      u.coins -= gift.price;
+      store.addLedger(LedgerRec(u.id, 'gift', -gift.price, '${gift.name} → ${to.name}'));
+    }
     u.giftsSent++;
-    store.addLedger(LedgerRec(u.id, 'gift', -gift.price, '${gift.name} → ${to.name}'));
     if (rec != null) {
       final share = (gift.price * 0.1).round();
       rec.giftsReceived++;
@@ -913,6 +1398,7 @@ class SpectreServer {
   /// Toplu hediye: masadaki herkese (kendisi hariç) aynı hediye.
   void _giftAll(_Client c, UserRec u, Map<String, dynamic> msg, DateTime now) {
     if (!rules.giftsEnabled) return _err(c, 'Hediyeler şu an kapalı');
+    if (!allowed(u, 'groupGift')) return _err(c, _lockedMsg('groupGift'));
     final t = tableOf(u.id);
     if (t == null) return _err(c, 'Önce masaya otur');
     final g = store.gifts.where((g) => g['id'] == msg['giftId'] && g['enabled'] != false).firstOrNull;
@@ -1025,10 +1511,20 @@ class SpectreServer {
           u.coins += o.coins;
           u.totalSpent += o.amountKurus;
           final pkg = store.packages.where((p) => p.id == o.packageId).firstOrNull;
-          if ((pkg?.vipDays ?? 0) > 0 && u.role == 'player') u.role = 'vip';
-          store.addLedger(LedgerRec(u.id, 'purchase', o.coins, '${o.packageName} (${o.id})'));
+          final granted = pkg == null ? <String>[] : grantPackage(u, pkg);
+          if (o.coins > 0) store.addLedger(LedgerRec(u.id, 'purchase', o.coins, '${o.packageName} (${o.id})'));
           _toUser(u.id, Ev.me, meJson(u));
-          _notify(u.id, 'order', 'Siparişin onaylandı: ${o.packageName} (+${o.coins} 🪙)');
+          _notify(u.id, 'order',
+              'Siparişin onaylandı: ${o.packageName}${o.coins > 0 ? ' (+${o.coins} 🪙)' : ''}${granted.isEmpty ? '' : ' — ${granted.join(', ')}'}');
+          final exp = pkg == null || pkg.features.isEmpty ? null : u.entitlements[pkg.features.first];
+          _mail(u, 'purchase', {
+            'order': o.id,
+            'package': o.packageName,
+            'amount': '${(o.amountKurus / 100).toStringAsFixed(2)} TL',
+            'coins': '${o.coins}',
+            'features': granted.isEmpty ? '-' : granted.join(', '),
+            'expires': exp == null ? '-' : _date(exp),
+          });
         }
       case 'refund':
         if (o.status != 'paid') throw ApiError(409, 'Yalnız ödenmiş sipariş iade edilir');
@@ -1037,6 +1533,8 @@ class SpectreServer {
           final take = math.min(u.coins, o.coins);
           u.coins -= take;
           u.totalSpent -= o.amountKurus;
+          final pkg = store.packages.where((p) => p.id == o.packageId).firstOrNull;
+          if (pkg != null) grantPackage(u, pkg, sign: -1);
           store.addLedger(LedgerRec(u.id, 'refund', -take, 'İade ${o.id}'));
           _toUser(u.id, Ev.me, meJson(u));
           _notify(u.id, 'order', 'Siparişin iade edildi: ${o.packageName}');
@@ -1231,6 +1729,32 @@ class SpectreServer {
           final t = tableOf(u.id) ?? (throw ApiError(409, 'Oyuncu masada değil'));
           t.leave(u.id, DateTime.now(), reason: 'yönetici tarafından masadan çıkarıldı');
           store.log(actor, 'Masadan çıkarıldı (${t.name})', u.username);
+        case 'grant':
+          final key = '${b['feature']}';
+          if (store.feature(key) == null) throw ApiError(400, 'Özellik yok');
+          final days = (b['days'] as num?)?.toInt() ?? 30;
+          final now = DateTime.now();
+          final cur = u.entitlements[key];
+          final base = cur != null && cur.isAfter(now) ? cur : now;
+          u.entitlements[key] = days <= 0 ? _forever : base.add(Duration(days: days.clamp(1, 3650)));
+          u.expiryWarned.removeWhere((w) => w.startsWith('$key@'));
+          tableOf(u.id)?.updatePlayer(_seatPlayer(u));
+          _toUser(u.id, Ev.me, meJson(u));
+          _notify(u.id, 'order', '${store.feature(key)!.name} hakkı tanımlandı (${days <= 0 ? 'süresiz' : '$days gün'})');
+          store.log(actor, 'Hak tanımlandı: $key ${days <= 0 ? 'süresiz' : '$days gün'}', u.username);
+        case 'revoke':
+          final key = '${b['feature']}';
+          u.entitlements.remove(key);
+          tableOf(u.id)?.updatePlayer(_seatPlayer(u));
+          _toUser(u.id, Ev.me, meJson(u));
+          store.log(actor, 'Hak kaldırıldı: $key', u.username);
+        case 'inventory':
+          final gid = '${b['giftId']}';
+          if (!store.gifts.any((g) => g['id'] == gid)) throw ApiError(400, 'Hediye yok');
+          final qty = (b['qty'] as num?)?.toInt() ?? 0;
+          u.inventory[gid] = math.max(0, (u.inventory[gid] ?? 0) + qty);
+          _toUser(u.id, Ev.me, meJson(u));
+          store.log(actor, 'Hediye envanteri $gid ${qty >= 0 ? '+' : ''}$qty', u.username);
         case 'rename':
           final d = _clip('${b['displayName'] ?? ''}'.trim(), 20);
           if (d.length < 2) throw ApiError(400, 'Ad çok kısa');
@@ -1348,14 +1872,162 @@ class SpectreServer {
     }
 
     // --- Market ---
+    // --- Özellikler (kilitlenebilir haklar) ---
+    if (path == '/features') {
+      if (m == 'GET') return {'items': [for (final f in store.features) f.toJson()]};
+      if (m == 'POST') {
+        final b = await _body(req);
+        final key = '${b['key'] ?? ''}'.trim();
+        if (!RegExp(r'^[A-Za-z][A-Za-z0-9_]{1,31}$').hasMatch(key)) throw ApiError(400, 'Geçersiz anahtar (harf/rakam/_)');
+        var f = store.feature(key);
+        if (f == null) {
+          f = FeatureRec(key: key, name: key);
+          store.features.add(f);
+        }
+        f
+          ..name = _clip('${b['name'] ?? f.name}'.trim(), 40)
+          ..description = _clip('${b['description'] ?? f.description}', 200)
+          ..locked = b['locked'] as bool? ?? f.locked;
+        if (b['delete'] == true && !f.builtin) store.features.remove(f);
+        store.log(actor, 'Özellik kaydedildi', key);
+        for (final c in _clients) {
+          final u = store.users[c.userId];
+          if (u != null) c.send({'event': Ev.me, 'data': meJson(u)});
+        }
+        return f.toJson();
+      }
+    }
+
+    // --- Mail ---
+    if (path == '/mail/templates') {
+      if (m == 'GET') {
+        return {
+          'items': {
+            for (final k in kDefaultMailTemplates.keys) k: {...templateOf(k), 'name': kDefaultMailTemplates[k]!['name']}
+          },
+          'variables': ['brand', 'site', 'name', 'username', 'link', 'order', 'package', 'amount', 'coins', 'features', 'expires', 'feature', 'days', 'message'],
+        };
+      }
+    }
+    if (m == 'POST' && path == '/mail/test') {
+      final b = await _body(req);
+      final to = '${b['to'] ?? ''}'.trim();
+      if (!_emailPattern.hasMatch(to)) throw ApiError(400, 'Geçerli bir adres girin');
+      final key = kDefaultMailTemplates.containsKey(b['template']) ? b['template'] as String : 'welcome';
+      final ok = await sendTemplate(to, key, {
+        'name': 'Test Oyuncu',
+        'username': 'test',
+        'link': _link('/eposta-dogrula', 'ornek'),
+        'order': 'S0000',
+        'package': 'Örnek paket',
+        'amount': '49.99 TL',
+        'coins': '500',
+        'features': 'Özel mesaj',
+        'expires': _date(DateTime.now().add(const Duration(days: 30))),
+        'feature': 'Özel mesaj',
+        'days': '3',
+        'message': 'Örnek yanıt',
+      });
+      if (!ok) throw ApiError(502, 'Gönderilemedi: ${store.mailLog.last['error']}');
+      return {'ok': true};
+    }
+    if (m == 'GET' && path == '/mail/log') return {'items': store.mailLog.reversed.take(100).toList()};
+
+    // --- Destek ---
+    if (path == '/support/kb') {
+      if (m == 'GET') return {'items': [for (final e in store.kb) e.toJson()]};
+      if (m == 'PUT') {
+        final b = await _body(req);
+        final list = (b['items'] as List? ?? const []).whereType<Map>().take(300).toList();
+        store.kb
+          ..clear()
+          ..addAll([
+            for (final e in list)
+              KbEntry(
+                id: '${e['id'] ?? store.nextId('kb')}',
+                question: _clip('${e['question'] ?? ''}', 200),
+                keywords: [for (final k in (e['keywords'] as List? ?? const [])) _clip('$k'.trim().toLowerCase(), 40)]
+                    .where((k) => k.isNotEmpty)
+                    .toList(),
+                answer: _clip('${e['answer'] ?? ''}', 2000),
+              )
+          ]);
+        store.log(actor, 'Destek bilgi tabanı güncellendi', '${store.kb.length} kayıt');
+        return {'items': [for (final e in store.kb) e.toJson()]};
+      }
+    }
+    if (m == 'GET' && path == '/support/tickets') {
+      final status = req.uri.queryParameters['status'] ?? '';
+      final list = store.tickets.where((t) => status.isEmpty || t.status == status).toList()
+        ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      return {
+        'counts': {
+          for (final st in const ['bot', 'waiting', 'answered', 'locked', 'closed'])
+            st: store.tickets.where((t) => t.status == st).length
+        },
+        'items': [
+          for (final t in list.take(200))
+            {
+              ...t.toJson(),
+              'username': store.users[t.userId]?.username,
+              'displayName': store.users[t.userId]?.displayName,
+              'avatarUrl': store.users[t.userId]?.avatarUrl,
+            }
+        ],
+      };
+    }
+    if (seg.length == 4 && seg[0] == 'support' && seg[1] == 'tickets' && seg[3] == 'action' && m == 'POST') {
+      final t = store.tickets.where((x) => x.id == seg[2]).firstOrNull ?? (throw ApiError(404, 'Talep yok'));
+      final u = store.users[t.userId];
+      final b = await _body(req);
+      switch ('${b['action']}') {
+        case 'reply':
+          final text = _clip('${b['text'] ?? ''}'.trim(), 2000);
+          if (text.isEmpty) throw ApiError(400, 'Yanıt boş');
+          t.messages.add(TicketMsg('admin:$actor', text));
+          t.status = 'answered';
+          if (u != null) {
+            _notify(u.id, 'admin', 'Destek yanıtı: ${text.length > 80 ? '${text.substring(0, 80)}…' : text}');
+            _mail(u, 'supportReply', {'message': text});
+          }
+        case 'close':
+          t.status = 'closed';
+        case 'unlock':
+          t.lockedUntil = null;
+          t.status = 'waiting';
+        default:
+          throw ApiError(400, 'Bilinmeyen işlem');
+      }
+      t.updatedAt = DateTime.now();
+      store.log(actor, 'Destek: ${b['action']}', u?.username ?? t.id);
+      return {
+        ...t.toJson(),
+        'username': u?.username,
+        'displayName': u?.displayName,
+      };
+    }
+
     if (path == '/packages') {
       if (m == 'GET') return {'items': [for (final p in store.packages) p.toJson()]};
       if (m == 'POST') {
         final b = await _body(req);
         final name = _clip('${b['name'] ?? ''}'.trim(), 40);
-        final coins = (b['coins'] as num?)?.toInt() ?? -1;
+        final coins = (b['coins'] as num?)?.toInt() ?? 0;
         final price = (b['priceKurus'] as num?)?.toInt() ?? -1;
-        if (name.isEmpty || coins <= 0 || price <= 0) throw ApiError(400, 'Ad, coin ve fiyat gerekli');
+        final kind = const {'coins', 'subscription', 'feature'}.contains(b['kind']) ? b['kind'] as String : 'coins';
+        final feats = [
+          for (final f in (b['features'] as List? ?? const []))
+            if (store.feature('$f') != null) '$f'
+        ];
+        final gifts = [
+          for (final g in (b['gifts'] as List? ?? const []))
+            if (g is Map && store.gifts.any((x) => x['id'] == g['giftId']) && (g['qty'] as num? ?? 0) > 0)
+              {'giftId': '${g['giftId']}', 'qty': (g['qty'] as num).toInt().clamp(1, 100000)}
+        ];
+        if (name.isEmpty || price <= 0) throw ApiError(400, 'Ad ve fiyat gerekli');
+        if (coins < 0 || (coins == 0 && feats.isEmpty && gifts.isEmpty && ((b['vipDays'] as num?) ?? 0) == 0)) {
+          throw ApiError(400, 'Paket en az coin, özellik ya da hediye içermeli');
+        }
         var p = store.packages.where((x) => x.id == b['id']).firstOrNull;
         if (p == null) {
           p = PackageRec(id: store.nextId('p'), name: name, coins: coins, priceKurus: price);
@@ -1368,7 +2040,12 @@ class SpectreServer {
           ..bonusPercent = ((b['bonusPercent'] as num?)?.toInt() ?? 0).clamp(0, 500)
           ..vipDays = ((b['vipDays'] as num?)?.toInt() ?? 0).clamp(0, 3650)
           ..active = b['active'] as bool? ?? p.active
-          ..featured = b['featured'] as bool? ?? p.featured;
+          ..featured = b['featured'] as bool? ?? p.featured
+          ..kind = kind
+          ..periodDays = ((b['periodDays'] as num?)?.toInt() ?? 0).clamp(0, 3650)
+          ..description = _clip('${b['description'] ?? ''}', 400)
+          ..features = feats
+          ..gifts = gifts;
         store.log(actor, 'Paket kaydedildi', name);
         return p.toJson();
       }
@@ -1439,6 +2116,7 @@ class SpectreServer {
         final before = store.settings.toJson().toString() + rules.toJson().toString();
         if (b['settings'] is Map) store.settings.apply((b['settings'] as Map).cast<String, dynamic>());
         if (b['rules'] is Map) rules.apply((b['rules'] as Map).cast<String, dynamic>());
+        _applyAnimRules();
         store.rules = rules.toJson();
         if (before != store.settings.toJson().toString() + rules.toJson().toString()) {
           store.log(actor, 'Ayarlar güncellendi', (b['what'] ?? '').toString());
